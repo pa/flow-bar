@@ -19,5 +19,10 @@ let package = Package(
             name: "flowbar-smoke",
             dependencies: ["FlowBarCore"]
         ),
+        // The menubar app. Build a runnable .app bundle with ./build-app.sh.
+        .executableTarget(
+            name: "flow-bar",
+            dependencies: ["FlowBarCore"]
+        ),
     ]
 )

@@ -1,0 +1,56 @@
+import FlowBarCore
+import Foundation
+
+/// Observable view-model backing the menubar UI. macOS 13 compatible
+/// (ObservableObject, not the macOS 14 @Observable macro).
+///
+/// All flow CLI calls are blocking `Process` invocations, so they run on a
+/// detached task and publish results back on the main actor.
+@MainActor
+final class Store: ObservableObject {
+    @Published var tasks: [FlowTask] = []
+    @Published var lastUpdated: Date?
+    @Published var errorText: String?
+    @Published var isLoading = false
+
+    private let client = FlowClient()
+
+    /// Reload the in-progress task list.
+    func refresh() {
+        isLoading = true
+        Task {
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try FlowClient().inProgressTasks()
+                }.value
+                self.tasks = result
+                self.errorText = nil
+                self.lastUpdated = Date()
+            } catch {
+                self.errorText = String(describing: error)
+            }
+            self.isLoading = false
+        }
+    }
+
+    /// Switch to a task — `flow do <slug>` focuses its live tab or spawns a
+    /// new one. (Phase 3 will add search + richer guard/Accessibility
+    /// surfacing; Phase 2 wires the basic action + error reporting.)
+    func switchTo(_ slug: String) {
+        Task {
+            do {
+                let res = try await Task.detached(priority: .userInitiated) {
+                    try FlowClient().doTask(slug)
+                }.value
+                if res.code != 0 {
+                    self.errorText = "switch to \(slug) failed: \(res.stderr)"
+                } else {
+                    self.errorText = nil
+                }
+            } catch {
+                self.errorText = String(describing: error)
+            }
+            self.refresh()
+        }
+    }
+}
