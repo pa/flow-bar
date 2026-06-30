@@ -1,0 +1,9 @@
+# SwiftPM build output
+.build/
+.swiftpm/
+
+# Assembled app bundle (produced by ./build-app.sh)
+*.app/
+
+# macOS cruft
+.DS_Store
