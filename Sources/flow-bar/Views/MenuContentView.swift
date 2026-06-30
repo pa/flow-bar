@@ -53,6 +53,13 @@ struct MenuContentView: View {
     @State private var taskFilter: TaskFilter = .inProgress
     @FocusState private var searchFocused: Bool
 
+    /// flow terminal backends ($FLOW_TERM values). flow-bar is a GUI app with
+    /// no terminal env to detect from, so the user picks explicitly.
+    static let terminalOptions: [(label: String, value: String)] = [
+        ("zellij", "zellij"), ("kitty", "kitty"), ("iTerm2", "iterm"),
+        ("Terminal.app", "terminal"), ("Warp", "warp"), ("Ghostty", "ghostty"),
+    ]
+
     var body: some View {
         HStack(spacing: 0) {
             rail
@@ -207,6 +214,19 @@ struct MenuContentView: View {
                     }
                 }
                 Divider()
+                Menu("Terminal") {
+                    ForEach(Self.terminalOptions, id: \.value) { opt in
+                        Button {
+                            store.terminalBackend = opt.value
+                        } label: {
+                            if store.terminalBackend == opt.value {
+                                Label(opt.label, systemImage: "checkmark")
+                            } else {
+                                Text(opt.label)
+                            }
+                        }
+                    }
+                }
                 Toggle("Monochrome icon", isOn: $store.monochromeIcon)
             } label: {
                 HStack(spacing: 4) {
