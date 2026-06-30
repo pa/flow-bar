@@ -60,18 +60,19 @@ struct MenuContentView: View {
             pane
         }
         .frame(width: 440, height: 520)
-        .onAppear {
-            section = .tasks         // always open on the in-progress list
-            taskFilter = .inProgress
-            query = ""
-            store.refresh()          // in-progress list (default view)
-            store.refreshMetrics()   // powers the rail inbox badge
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
-        }
-        .onDisappear {
-            section = .tasks         // reset so the next open starts here too
-            query = ""
-        }
+        .onAppear { prepareForOpen() }
+        .onChange(of: store.openNonce) { _ in prepareForOpen() }
+    }
+
+    /// Reset navigation to the In-progress tab and refresh — run on every
+    /// popover open (the view is reused, so this is signalled via openNonce).
+    private func prepareForOpen() {
+        section = .tasks
+        taskFilter = .inProgress
+        query = ""
+        store.refresh()          // in-progress list (default view)
+        store.refreshMetrics()   // powers the rail inbox badge
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
     }
 
     // MARK: Rail

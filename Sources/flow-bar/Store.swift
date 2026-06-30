@@ -39,6 +39,10 @@ final class Store: ObservableObject {
     /// True while a terminal-spawning command is running.
     var isWorking: Bool { spawningOps > 0 }
 
+    /// Bumped each time the popover opens, so the content view can reset its
+    /// navigation to the In-progress tab without recreating the view.
+    @Published var openNonce = 0
+
     /// Transient outcome of the last fire-and-forget action (switch / run),
     /// shown briefly on the menubar icon so completion isn't ambiguous.
     enum OpResult: Equatable { case success, failure, alreadyOpen }
