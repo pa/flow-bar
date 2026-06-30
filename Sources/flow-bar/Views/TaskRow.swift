@@ -44,6 +44,13 @@ struct TaskRow: View {
                 Spacer(minLength: 4)
 
                 HStack(spacing: 5) {
+                    if task.isDueSoon, let label = task.dueLabel {
+                        Text(label)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(task.isOverdue ? .red : .orange)
+                            .lineLimit(1)
+                            .help(task.due.map { "due \($0)" } ?? "due soon")
+                    }
                     if task.isWaiting {
                         badge("hourglass", .orange, help: task.waitingOn ?? "waiting")
                     }

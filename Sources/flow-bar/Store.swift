@@ -14,6 +14,29 @@ final class Store: ObservableObject {
     @Published var isLoading = false
 
     private let client = FlowClient()
+    private var pollTask: Task<Void, Never>?
+
+    init() {
+        startPolling()
+    }
+
+    /// Number of in-progress tasks that need attention (overdue) — drives the
+    /// menubar icon badge.
+    var attentionCount: Int {
+        tasks.filter { $0.isOverdue }.count
+    }
+
+    /// Refresh on a fixed cadence so the menubar stays current without the
+    /// popover being open. Refreshes immediately, then every `interval`.
+    func startPolling(interval: TimeInterval = 20) {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.refresh()
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            }
+        }
+    }
 
     /// Reload the in-progress task list.
     func refresh() {

@@ -21,6 +21,10 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
     public var live: Bool?
     public var updated: String?
     public var tags: [String]?
+    public var assignee: String?
+    public var due: String?
+    public var dueInDays: Int?
+    public var dueLabel: String?
 
     public var id: String { slug }
 
@@ -30,7 +34,9 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
         case stale
         case staleDays = "stale_days"
         case waitingOn = "waiting_on"
-        case live, updated, tags
+        case live, updated, tags, assignee, due
+        case dueInDays = "due_in_days"
+        case dueLabel = "due_label"
     }
 
     // MARK: Convenience accessors (nil-safe for the UI layer)
@@ -47,15 +53,25 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
     public enum Priority: String { case high, medium, low }
     public var priorityValue: Priority { Priority(rawValue: priority) ?? .medium }
 
+    /// Has a due date that is overdue or within the next few days.
+    public var isDueSoon: Bool {
+        guard let d = dueInDays else { return false }
+        return d <= 3
+    }
+    public var isOverdue: Bool { (dueInDays ?? 1) < 0 }
+
     public init(
         slug: String, name: String, status: String, priority: String,
         project: String? = nil, ageDays: Int? = nil, stale: Bool? = nil,
         staleDays: Int? = nil, waitingOn: String? = nil, live: Bool? = nil,
-        updated: String? = nil, tags: [String]? = nil
+        updated: String? = nil, tags: [String]? = nil, assignee: String? = nil,
+        due: String? = nil, dueInDays: Int? = nil, dueLabel: String? = nil
     ) {
         self.slug = slug; self.name = name; self.status = status
         self.priority = priority; self.project = project; self.ageDays = ageDays
         self.stale = stale; self.staleDays = staleDays; self.waitingOn = waitingOn
         self.live = live; self.updated = updated; self.tags = tags
+        self.assignee = assignee; self.due = due; self.dueInDays = dueInDays
+        self.dueLabel = dueLabel
     }
 }
