@@ -60,6 +60,9 @@ struct MenuContentView: View {
             pane
         }
         .frame(width: 440, height: 520)
+        // Opaque background so the popover doesn't show the desktop through
+        // NSPopover's translucent material (which reads as a "ghost").
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { prepareForOpen() }
         .onChange(of: store.openNonce) { _ in prepareForOpen() }
     }
