@@ -2,8 +2,8 @@
 
 A lightweight native macOS **menubar app** for the [flow](https://github.com/Facets-cloud/flow)
 dashboard + task switcher. Click the menubar icon → search/filter your
-in-progress tasks → press Enter (or click) to switch to one. A Team tab
-shows org-wide activity from flow-workspace.
+in-progress tasks → press Enter (or click) to switch to one. An icon rail
+covers Overview, Needs-you, Playbooks, Projects, and Owners.
 
 ## Build & run
 
@@ -30,19 +30,19 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
   reads go through `flow list tasks --format json`, actions through real
   subcommands. This keeps us schema-proof and respects flow's invariants.
 - **`FlowBarCore`** (library): pure data/logic, no UI.
-  - `Models.swift` — `FlowTask` (Codable, matches the JSON), `TeamMember`/
-    `TeamActivityTask`.
+  - `Models.swift` / `EntityModels.swift` — `FlowTask`, `Project`, `Playbook`,
+    `PlaybookRun`, `Owner`, `TagCount`, `DashboardMetrics`.
   - `FlowClient.swift` — binary discovery (+ a generous PATH so GUI launches
-    find `flow`/`flow-workspace`/`claude`), `Process` runner, `inProgressTasks`,
-    `teamActivity` (text parser — `flow-workspace activity` has no JSON mode),
-    `doTask`.
+    find `flow`/`claude`), `Process` runner, entity reads (JSON; owners/tags
+    via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions.
 - **`flow-bar`** (executable): the SwiftUI app.
   - `FlowBarApp.swift` — `@main` + `MenuBarExtra` (`.window` style; `.accessory`
     activation policy / `LSUIElement` = menubar agent, no dock icon).
   - `Store.swift` — `@MainActor ObservableObject` (macOS 13 compatible, not the
-    macOS 14 `@Observable` macro). Polls the in-progress list every 60s
-    (instant on open + after switch); team/metrics/playbooks/owner-tasks load
-    on demand.
+    macOS 14 `@Observable` macro). Polls the in-progress list every 120s
+    (instant on open + after switch); metrics/playbooks/owner-tasks load on
+    demand. `refreshMetrics` runs its reads concurrently. Switching dismisses
+    the popover immediately and runs `flow do` fire-and-forget.
   - `BrandIcon.swift` — flow's "w" wave (from the public repo's
     `assets/flow-logo.svg`) embedded as base64, sized ~11pt for the menubar.
   - `Views/` — `MenuContentView` is the root: left **icon rail** + content
@@ -50,7 +50,7 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
     (home), `InboxView` ("Needs you": owner questions + overdue + waiting),
     `DashboardView` (metric tiles), `ProjectsView` (drill into a project's
     tasks), `PlaybooksView` (runs + Run), `OwnersView` (questions/tasks +
-    pause/resume), `TeamView`. Plus `TaskRow`.
+    pause/resume). Plus `TaskRow`. (A Team view existed but was removed.)
 - **`flowbar-smoke`** (executable): data-path verification.
 
 ## How "switch to a task" works
@@ -69,12 +69,11 @@ the spawn (hand-rolling a resume can't focus a specific existing tab).
 - The app bundle is **ad-hoc signed**; on first run you may need
   `xattr -d com.apple.quarantine flow-bar.app`. Signing/notarization is a
   later concern.
-- `flow-workspace activity` is **text, not JSON** — parsed by
-  `FlowClient.parseActivity`. If its output format changes, update that
-  parser. It also makes a network call; the Team tab degrades to a
-  "Workspace unavailable" state on failure.
-- flow binaries live at `~/.local/bin/flow` and `~/go/bin/flow-workspace`;
-  `FlowClient.searchPATH` lists the dirs we probe.
+- `flow owner list` and `flow list tags` are **text, not JSON** — parsed by
+  `FlowClient.listOwners`/`listTags`. If their output format changes, update
+  those parsers.
+- The flow binary lives at `~/.local/bin/flow`; `FlowClient.searchPATH` lists
+  the dirs we probe.
 
 ## Read-mostly philosophy
 
@@ -86,7 +85,7 @@ user-initiated, and need the one-time Accessibility grant.
 ## Status
 
 Phases 1–11 complete. v1 (P1–6): data layer, menubar shell, search switcher,
-polling + due badge, team view, docs. Expansion (P7–11): icon-rail nav +
+polling + due badge, docs. Expansion (P7–11): icon-rail nav +
 metrics dashboard + brand "w" icon, Needs-you inbox, Projects drill-in,
 Playbooks, Owners. Tracked in flow as task `flow-bar` (project `side-quests`,
 `#flow`).

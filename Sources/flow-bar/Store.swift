@@ -14,11 +14,6 @@ final class Store: ObservableObject {
     @Published var errorText: String?
     @Published var isLoading = false
 
-    // Team (flow-workspace activity) — loaded on demand, not polled.
-    @Published var teamMembers: [TeamMember] = []
-    @Published var teamError: String?
-    @Published var teamLoading = false
-
     // Dashboard metrics — aggregated from local CLI calls, on demand.
     @Published var metrics: DashboardMetrics?
     @Published var metricsError: String?
@@ -69,24 +64,6 @@ final class Store: ObservableObject {
                 self.errorText = String(describing: error)
             }
             self.isLoading = false
-        }
-    }
-
-    /// Load team activity (network call). On-demand only; degrades to an
-    /// error message the UI can show without blocking the rest of the app.
-    func refreshTeam() {
-        teamLoading = true
-        Task {
-            do {
-                let result = try await Task.detached(priority: .userInitiated) {
-                    try FlowClient().teamActivity()
-                }.value
-                self.teamMembers = result
-                self.teamError = nil
-            } catch {
-                self.teamError = String(describing: error)
-            }
-            self.teamLoading = false
         }
     }
 
