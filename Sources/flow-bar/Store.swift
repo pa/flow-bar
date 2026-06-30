@@ -261,9 +261,10 @@ final class Store: ObservableObject {
         }
     }
 
-    /// Close the MenuBarExtra popover so an action feels instant.
-    /// (The .window-style popover is the key window when a row is clicked.)
+    /// Close the menubar popover so an action feels instant. The AppDelegate
+    /// registers a handler that performs the actual NSPopover close.
+    static var dismissHandler: (() -> Void)?
     static func dismissPopover() {
-        NSApp.keyWindow?.close()
+        dismissHandler?()
     }
 }
