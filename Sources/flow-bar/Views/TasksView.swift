@@ -17,11 +17,11 @@ enum TaskFilter: String, CaseIterable, Identifiable {
 
 /// The task list, with a status filter and the global search query.
 /// In-progress uses the live polled list; other filters load on demand.
+/// The filter is owned by the root so dashboard tiles can set it.
 struct TasksView: View {
     @ObservedObject var store: Store
     let query: String
-
-    @State private var filter: TaskFilter = .inProgress
+    @Binding var filter: TaskFilter
 
     var body: some View {
         VStack(spacing: 0) {

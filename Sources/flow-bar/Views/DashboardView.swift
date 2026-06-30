@@ -5,7 +5,7 @@ import SwiftUI
 /// nothing estimated.
 struct DashboardView: View {
     @ObservedObject var store: Store
-    var onJump: (Section) -> Void = { _ in }
+    var onNavigate: (NavTarget) -> Void = { _ in }
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible()),
                            GridItem(.flexible())]
@@ -33,26 +33,26 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 12) {
                 groupLabel("Work")
                 LazyVGrid(columns: columns, spacing: 8) {
-                    tile("\(m.inProgressCount)", "in progress", .blue) { onJump(.tasks) }
-                    tile("\(m.backlogCount)", "backlog", .gray) { onJump(.tasks) }
-                    tile("\(m.doneCount)", "done", .green) { onJump(.tasks) }
-                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary) { onJump(.inbox) }
-                    tile("\(m.staleCount)", "stale", m.staleCount > 0 ? .yellow : .secondary) { onJump(.tasks) }
-                    tile("\(m.liveCount)", "live", m.liveCount > 0 ? .green : .secondary) { onJump(.tasks) }
+                    tile("\(m.inProgressCount)", "in progress", .blue) { onNavigate(.tasks(.inProgress)) }
+                    tile("\(m.backlogCount)", "backlog", .gray) { onNavigate(.tasks(.backlog)) }
+                    tile("\(m.doneCount)", "done", .green) { onNavigate(.tasks(.done)) }
+                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary) { onNavigate(.section(.inbox)) }
+                    tile("\(m.staleCount)", "stale", m.staleCount > 0 ? .yellow : .secondary) { onNavigate(.tasks(.inProgress)) }
+                    tile("\(m.liveCount)", "live", m.liveCount > 0 ? .green : .secondary) { onNavigate(.tasks(.inProgress)) }
                 }
 
                 groupLabel("Needs you")
                 LazyVGrid(columns: columns, spacing: 8) {
-                    tile("\(m.questionCount)", "questions", m.questionCount > 0 ? .orange : .secondary) { onJump(.inbox) }
-                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary) { onJump(.inbox) }
-                    tile("\(m.waitingCount)", "waiting", .secondary) { onJump(.inbox) }
+                    tile("\(m.questionCount)", "questions", m.questionCount > 0 ? .orange : .secondary) { onNavigate(.section(.inbox)) }
+                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary) { onNavigate(.section(.inbox)) }
+                    tile("\(m.waitingCount)", "waiting", .secondary) { onNavigate(.section(.inbox)) }
                 }
 
                 groupLabel("Automation")
                 LazyVGrid(columns: columns, spacing: 8) {
-                    tile("\(m.activeOwnerCount)", "owners", .purple) { onJump(.owners) }
-                    tile("\(m.runsRunning)", "runs live", m.runsRunning > 0 ? .green : .secondary) { onJump(.playbooks) }
-                    tile("\(m.activeProjectCount)", "projects", .blue) { onJump(.projects) }
+                    tile("\(m.activeOwnerCount)", "owners", .purple) { onNavigate(.section(.owners)) }
+                    tile("\(m.runsRunning)", "runs live", m.runsRunning > 0 ? .green : .secondary) { onNavigate(.section(.playbooks)) }
+                    tile("\(m.activeProjectCount)", "projects", .blue) { onNavigate(.section(.projects)) }
                 }
 
                 if !m.topTags.isEmpty {

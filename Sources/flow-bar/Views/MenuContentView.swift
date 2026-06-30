@@ -37,6 +37,12 @@ enum Section: String, CaseIterable, Identifiable {
     }
 }
 
+/// A navigation destination a dashboard tile can route to.
+enum NavTarget {
+    case section(Section)
+    case tasks(TaskFilter)
+}
+
 /// Popover root: icon rail + content pane (header with global search, the
 /// active section view, and a footer).
 struct MenuContentView: View {
@@ -44,6 +50,7 @@ struct MenuContentView: View {
 
     @State private var section: Section = .tasks
     @State private var query: String = ""
+    @State private var taskFilter: TaskFilter = .inProgress
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -55,6 +62,7 @@ struct MenuContentView: View {
         .frame(width: 440, height: 520)
         .onAppear {
             section = .tasks         // always open on the in-progress list
+            taskFilter = .inProgress
             query = ""
             store.refresh()          // in-progress list (default view)
             store.refreshMetrics()   // powers the rail inbox badge
@@ -122,8 +130,8 @@ struct MenuContentView: View {
     @ViewBuilder
     private var sectionView: some View {
         switch section {
-        case .dashboard: DashboardView(store: store) { jump(to: $0) }
-        case .tasks:     TasksView(store: store, query: query)
+        case .dashboard: DashboardView(store: store) { navigate($0) }
+        case .tasks:     TasksView(store: store, query: query, filter: $taskFilter)
         case .inbox:     InboxView(store: store)
         case .projects:  ProjectsView(store: store, query: query)
         case .playbooks: PlaybooksView(store: store, query: query)
@@ -222,6 +230,19 @@ struct MenuContentView: View {
     private func jump(to s: Section) {
         section = s
         onSectionChange(s)
+    }
+
+    /// Route a dashboard tile to its destination — either a section, or the
+    /// Tasks view with a specific status filter applied.
+    private func navigate(_ target: NavTarget) {
+        switch target {
+        case .section(let s):
+            jump(to: s)
+        case .tasks(let f):
+            taskFilter = f
+            section = .tasks
+            if f == .inProgress { store.refresh() } else { store.loadBrowse(status: f.status) }
+        }
     }
 
     private func onSectionChange(_ s: Section) {
