@@ -42,6 +42,23 @@ final class Store: ObservableObject {
             || ownerTasksLoading || playbooksLoading || busyOps > 0
     }
 
+    /// Transient outcome of the last fire-and-forget action (switch / run),
+    /// shown briefly on the menubar icon so completion isn't ambiguous.
+    enum OpResult { case success, failure }
+    @Published var recentResult: OpResult?
+    private var resultResetTask: Task<Void, Never>?
+
+    /// Flash a result on the menubar icon, then clear it.
+    func flashResult(_ result: OpResult) {
+        recentResult = result
+        resultResetTask?.cancel()
+        let seconds: UInt64 = result == .success ? 1_600_000_000 : 3_500_000_000
+        resultResetTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: seconds)
+            if !Task.isCancelled { self?.recentResult = nil }
+        }
+    }
+
     init() {
         loadProfiles()
         startPolling()
@@ -134,10 +151,11 @@ final class Store: ObservableObject {
     func runPlaybook(_ slug: String, auto: Bool = false) {
         busyOps += 1
         Task {
-            _ = try? await Task.detached(priority: .userInitiated) {
+            let res = try? await Task.detached(priority: .userInitiated) {
                 try FlowClient().runPlaybook(slug, auto: auto)
             }.value
             self.busyOps -= 1
+            self.flashResult((res?.code ?? 1) == 0 ? .success : .failure)
             self.refreshPlaybooks()
         }
     }
@@ -233,10 +251,13 @@ final class Store: ObservableObject {
                 }.value
                 // Surface a failure on the next open; don't block the switch.
                 self.errorText = res.code != 0 ? "switch to \(slug) failed: \(res.stderr)" : nil
+                self.busyOps -= 1
+                self.flashResult(res.code == 0 ? .success : .failure)
             } catch {
                 self.errorText = String(describing: error)
+                self.busyOps -= 1
+                self.flashResult(.failure)
             }
-            self.busyOps -= 1
         }
     }
 

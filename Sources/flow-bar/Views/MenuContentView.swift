@@ -174,19 +174,21 @@ struct MenuContentView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Menu {
-                ForEach(store.profiles) { p in
-                    Button {
-                        store.setActiveProfile(p.id)
-                    } label: {
-                        if p.id == store.activeProfileID {
-                            Label(p.name, systemImage: "checkmark")
-                        } else {
-                            Text(p.name)
+                SwiftUI.Section("Flow Roots") {
+                    ForEach(store.profiles) { p in
+                        Button {
+                            store.setActiveProfile(p.id)
+                        } label: {
+                            if p.id == store.activeProfileID {
+                                Label(p.name, systemImage: "checkmark")
+                            } else {
+                                Text(p.name)
+                            }
                         }
                     }
                 }
                 Divider()
-                Button("Add Profile…") { store.addProfileViaPicker() }
+                Button("Add Flow Root…") { store.addProfileViaPicker() }
                 if store.activeProfileID != Profile.defaultID {
                     Button("Remove “\(store.activeProfile.name)”", role: .destructive) {
                         store.removeActiveProfile()
@@ -196,12 +198,12 @@ struct MenuContentView: View {
                 Toggle("Monochrome icon", isOn: $store.monochromeIcon)
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "person.crop.circle").font(.system(size: 11))
+                    Image(systemName: "externaldrive").font(.system(size: 11))
                     Text(store.activeProfile.name).font(.system(size: 11))
                 }
             }
             .menuStyle(.borderlessButton).fixedSize()
-            .help("Switch flow profile")
+            .help("Switch flow root")
 
             Spacer()
 
