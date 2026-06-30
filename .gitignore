@@ -7,3 +7,9 @@
 
 # macOS cruft
 .DS_Store
+
+# Demo/test flow root (seeded data for recording)
+demo-flow-root/
+
+# Release artifact
+*.zip

@@ -1,0 +1,51 @@
+name: release
+
+# Tag a version (e.g. `git tag v0.1.0 && git push --tags`) to build the app,
+# attach flow-bar.zip to a GitHub release, and update the Homebrew cask.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Run tests
+        run: swift run flowbar-tests
+
+      - name: Build app bundle
+        run: ./build-app.sh
+
+      - name: Zip the app
+        run: ditto -c -k --keepParent flow-bar.app flow-bar.zip
+
+      - name: Compute checksum
+        id: sum
+        run: echo "sha256=$(shasum -a 256 flow-bar.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew cask
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="${{ steps.sum.outputs.sha256 }}"
+          sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/flow-bar.rb
+          sed -i '' -E "s/sha256 .*/sha256 \"${SHA}\"/" Casks/flow-bar.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/flow-bar.rb
+          git commit -m "cask: ${GITHUB_REF_NAME} (${SHA})" || echo "no cask change"
+          git push origin HEAD:main || echo "push skipped"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: flow-bar.zip
+          generate_release_notes: true
