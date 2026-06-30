@@ -105,7 +105,11 @@ extension Store {
     }
 
     private func syncActiveRoot() {
-        UserDefaults.standard.set(activeProfile.root, forKey: activeFlowRootKey)
+        // For the built-in Default, don't force FLOW_ROOT — let `flow` use its
+        // own default root (matches running `flow` in a terminal). Only custom
+        // profiles set an explicit root. (FlowClient skips an empty value.)
+        let root = activeProfileID == Profile.defaultID ? "" : activeProfile.root
+        UserDefaults.standard.set(root, forKey: activeFlowRootKey)
     }
 
     /// Active root changed — drop cached data and reload against the new root.

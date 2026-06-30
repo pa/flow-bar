@@ -39,6 +39,29 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
         case dueLabel = "due_label"
     }
 
+    /// Tolerant decoder: only `slug` is required. Everything else defaults, so
+    /// one odd/incomplete row (a playbook-run, a future flow field change)
+    /// can't fail the whole list. `name` falls back to the slug.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        slug = try c.decode(String.self, forKey: .slug)   // only truly-required field
+        name = (try? c.decode(String.self, forKey: .name)) ?? slug
+        status = (try? c.decode(String.self, forKey: .status)) ?? "backlog"
+        priority = (try? c.decode(String.self, forKey: .priority)) ?? "medium"
+        project = try? c.decode(String.self, forKey: .project)
+        ageDays = try? c.decode(Int.self, forKey: .ageDays)
+        stale = try? c.decode(Bool.self, forKey: .stale)
+        staleDays = try? c.decode(Int.self, forKey: .staleDays)
+        waitingOn = try? c.decode(String.self, forKey: .waitingOn)
+        live = try? c.decode(Bool.self, forKey: .live)
+        updated = try? c.decode(String.self, forKey: .updated)
+        tags = try? c.decode([String].self, forKey: .tags)
+        assignee = try? c.decode(String.self, forKey: .assignee)
+        due = try? c.decode(String.self, forKey: .due)
+        dueInDays = try? c.decode(Int.self, forKey: .dueInDays)
+        dueLabel = try? c.decode(String.self, forKey: .dueLabel)
+    }
+
     // MARK: Convenience accessors (nil-safe for the UI layer)
 
     public var isStale: Bool { stale ?? false }
