@@ -56,18 +56,18 @@ struct PlaybooksView: View {
         let live = rs.filter { $0.status == "in-progress" }.count
         return HStack(spacing: 8) {
             Image(systemName: "play.rectangle").font(.system(size: 12)).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(p.slug).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 if let proj = p.project {
-                    Text(proj).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(proj).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 4)
             if live > 0 {
-                Text("\(live) live").font(.system(size: 9, weight: .medium)).foregroundStyle(.green)
+                Text("\(live) live").font(.system(size: 10, weight: .medium)).foregroundStyle(.green)
             }
-            Text("\(rs.count) runs").font(.system(size: 10)).foregroundStyle(.tertiary)
-            Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.tertiary)
+            Text("\(rs.count) runs").font(.system(size: 11)).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 4).padding(.horizontal, 8)
@@ -79,8 +79,8 @@ struct PlaybooksView: View {
             HStack(spacing: 4) {
                 Button { selected = nil } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "chevron.left").font(.system(size: 10))
-                        Text(p.slug).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                        Image(systemName: "chevron.left").font(.system(size: 11))
+                        Text(p.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     }
                 }.buttonStyle(.plain)
                 Spacer()
@@ -107,9 +107,9 @@ struct PlaybooksView: View {
                         ForEach(rs) { run in
                             HStack(spacing: 6) {
                                 statusDot(run.status)
-                                Text(run.slug).font(.system(size: 11)).lineLimit(1)
+                                Text(run.slug).font(.system(size: 12)).lineLimit(1)
                                 Spacer()
-                                Text(run.status).font(.system(size: 10)).foregroundStyle(.secondary)
+                                Text(run.status).font(.system(size: 11)).foregroundStyle(.secondary)
                             }
                             .padding(.horizontal, 12).padding(.vertical, 2)
                         }

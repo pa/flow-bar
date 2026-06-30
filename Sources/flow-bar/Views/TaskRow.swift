@@ -13,14 +13,14 @@ struct TaskRow: View {
                     .fill(priorityColor)
                     .frame(width: 7, height: 7)
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(task.slug)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold))
                             .lineLimit(1)
                         if task.isLive {
                             Image(systemName: "circle.fill")
-                                .font(.system(size: 6))
+                                .font(.system(size: 7))
                                 .foregroundStyle(.green)
                                 .help("live session")
                         }
@@ -28,13 +28,13 @@ struct TaskRow: View {
                     HStack(spacing: 6) {
                         if let project = task.projectName {
                             Text(project)
-                                .font(.system(size: 10))
+                                .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                         if !task.tagList.isEmpty {
                             Text(task.tagList.map { "#\($0)" }.joined(separator: " "))
-                                .font(.system(size: 10))
+                                .font(.system(size: 11))
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
@@ -46,7 +46,7 @@ struct TaskRow: View {
                 HStack(spacing: 5) {
                     if task.isDueSoon, let label = task.dueLabel {
                         Text(label)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(task.isOverdue ? .red : .orange)
                             .lineLimit(1)
                             .help(task.due.map { "due \($0)" } ?? "due soon")
@@ -61,7 +61,7 @@ struct TaskRow: View {
                 }
             }
             .contentShape(Rectangle())
-            .padding(.vertical, 3)
+            .padding(.vertical, 4)
             .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
@@ -69,7 +69,7 @@ struct TaskRow: View {
 
     private func badge(_ symbol: String, _ color: Color, help: String) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 9))
+            .font(.system(size: 10))
             .foregroundStyle(color)
             .help(help)
     }

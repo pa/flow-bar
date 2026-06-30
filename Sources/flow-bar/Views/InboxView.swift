@@ -28,8 +28,8 @@ struct InboxView: View {
         return Group {
             if empty {
                 VStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle").font(.system(size: 22)).foregroundStyle(.green)
-                    Text("Nothing needs you").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Image(systemName: "checkmark.circle").font(.system(size: 24)).foregroundStyle(.green)
+                    Text("Nothing needs you").font(.system(size: 13)).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -58,9 +58,9 @@ struct InboxView: View {
     private func groupHeader(_ title: String, _ count: Int, _ icon: String, _ color: Color) -> some View {
         if count > 0 {
             HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 10)).foregroundStyle(color)
-                Text(title.uppercased()).font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary)
-                Text("\(count)").font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary)
+                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(color)
+                Text(title.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
+                Text("\(count)").font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
         }

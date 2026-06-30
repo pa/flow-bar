@@ -48,15 +48,15 @@ struct OwnersView: View {
     private func row(_ o: Owner) -> some View {
         HStack(spacing: 8) {
             statusDot(o.status)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(o.slug).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                Text("\(o.status) · every \(o.every)").font(.system(size: 10)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(o.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text("\(o.status) · every \(o.every)").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
             if let rel = o.nextTickRelative {
-                Text(rel).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
+                Text(rel).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
             }
-            Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 4).padding(.horizontal, 8)
@@ -70,8 +70,8 @@ struct OwnersView: View {
             HStack(spacing: 6) {
                 Button { selected = nil } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "chevron.left").font(.system(size: 10))
-                        Text(o.slug).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                        Image(systemName: "chevron.left").font(.system(size: 11))
+                        Text(o.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     }
                 }.buttonStyle(.plain)
                 Spacer()
@@ -98,7 +98,7 @@ struct OwnersView: View {
             HStack(spacing: 4) {
                 Image(systemName: "clock").font(.system(size: 9)).foregroundStyle(.tertiary)
                 Text("next tick \(o.nextTickRelative ?? o.nextTick ?? "—")")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 10).padding(.bottom, 4)
             Divider()
@@ -128,7 +128,7 @@ struct OwnersView: View {
 
     private func sectionLabel(_ title: String, _ n: Int) -> some View {
         Text("\(title.uppercased())  \(n)")
-            .font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary)
+            .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
             .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
     }
 

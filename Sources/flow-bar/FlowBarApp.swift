@@ -15,9 +15,10 @@ struct FlowBarApp: App {
         MenuBarExtra {
             MenuContentView(store: store)
         } label: {
-            // Static flow brand "w" wave. (Attention counts live on the
-            // Needs-you rail badge inside the popover, not the menubar.)
-            Image(nsImage: BrandIcon.menubar)
+            // Static flow brand "w" wave (colored, or monochrome template
+            // per preference). Attention counts live on the Needs-you rail
+            // badge inside the popover, not the menubar.
+            Image(nsImage: BrandIcon.menubar(monochrome: store.monochromeIcon))
         }
         .menuBarExtraStyle(.window)
     }

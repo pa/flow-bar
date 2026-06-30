@@ -116,7 +116,7 @@ struct MenuContentView: View {
     @ViewBuilder
     private var sectionView: some View {
         switch section {
-        case .dashboard: DashboardView(store: store)
+        case .dashboard: DashboardView(store: store) { jump(to: $0) }
         case .tasks:     TasksView(store: store, query: query)
         case .team:      TeamView(store: store)
         case .inbox:     InboxView(store: store)
@@ -136,12 +136,12 @@ struct MenuContentView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: section.icon).foregroundStyle(.tint)
-            Text(section.title).font(.system(size: 13, weight: .bold))
-            Text(countLabel).font(.system(size: 11)).foregroundStyle(.secondary)
+            Image(systemName: section.icon).font(.system(size: 14)).foregroundStyle(.tint)
+            Text(section.title).font(.system(size: 15, weight: .bold))
+            Text(countLabel).font(.system(size: 12)).foregroundStyle(.secondary)
             Spacer()
             if isActiveLoading { ProgressView().controlSize(.small) }
-            Button(action: refreshActive) { Image(systemName: "arrow.clockwise") }
+            Button(action: refreshActive) { Image(systemName: "arrow.clockwise").font(.system(size: 13)) }
                 .buttonStyle(.plain).help("Refresh")
         }
         .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
@@ -149,9 +149,9 @@ struct MenuContentView: View {
 
     private var searchBar: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+            Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundStyle(.secondary)
             TextField("Search \(section.title.lowercased())…", text: $query)
-                .textFieldStyle(.plain).font(.system(size: 13))
+                .textFieldStyle(.plain).font(.system(size: 14))
                 .focused($searchFocused)
                 .onSubmit { if section == .tasks { switchToFirstTask() } }
             if !query.isEmpty {
@@ -160,26 +160,37 @@ struct MenuContentView: View {
                 }.buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 6)
+        .padding(.horizontal, 8).padding(.vertical, 7)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .padding(.horizontal, 10).padding(.bottom, 6)
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 8) {
             if let updated = store.lastUpdated {
                 Text("Updated \(updated.formatted(date: .omitted, time: .standard))")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
             }
             Spacer()
+            Menu {
+                Toggle("Monochrome icon", isOn: $store.monochromeIcon)
+            } label: {
+                Image(systemName: "gearshape").font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton).fixedSize().help("Settings")
             Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
     }
 
     // MARK: Behavior
+
+    private func jump(to s: Section) {
+        section = s
+        onSectionChange(s)
+    }
 
     private func onSectionChange(_ s: Section) {
         query = ""

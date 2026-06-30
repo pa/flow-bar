@@ -28,25 +28,25 @@ struct TeamView: View {
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(store.teamMembers) { member in
                     Text(member.name)
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 10)
                         .padding(.top, 8)
                     ForEach(member.tasks) { task in
                         HStack(spacing: 6) {
                             Text(task.slug)
-                                .font(.system(size: 12))
+                                .font(.system(size: 13))
                                 .lineLimit(1)
                             Spacer(minLength: 4)
                             if let project = task.project {
                                 Text(project)
-                                    .font(.system(size: 10))
+                                    .font(.system(size: 11))
                                     .foregroundStyle(.tertiary)
                                     .lineLimit(1)
                             }
                         }
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 1)
+                        .padding(.vertical, 2)
                     }
                 }
             }

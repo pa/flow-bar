@@ -5,6 +5,7 @@ import SwiftUI
 /// nothing estimated.
 struct DashboardView: View {
     @ObservedObject var store: Store
+    var onJump: (Section) -> Void = { _ in }
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible()),
                            GridItem(.flexible())]
@@ -32,34 +33,34 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 12) {
                 groupLabel("Work")
                 LazyVGrid(columns: columns, spacing: 8) {
-                    tile("\(m.inProgressCount)", "in progress", .blue)
-                    tile("\(m.backlogCount)", "backlog", .gray)
-                    tile("\(m.doneCount)", "done", .green)
-                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary)
-                    tile("\(m.staleCount)", "stale", m.staleCount > 0 ? .yellow : .secondary)
-                    tile("\(m.liveCount)", "live", m.liveCount > 0 ? .green : .secondary)
+                    tile("\(m.inProgressCount)", "in progress", .blue) { onJump(.tasks) }
+                    tile("\(m.backlogCount)", "backlog", .gray) { onJump(.tasks) }
+                    tile("\(m.doneCount)", "done", .green) { onJump(.tasks) }
+                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary) { onJump(.inbox) }
+                    tile("\(m.staleCount)", "stale", m.staleCount > 0 ? .yellow : .secondary) { onJump(.tasks) }
+                    tile("\(m.liveCount)", "live", m.liveCount > 0 ? .green : .secondary) { onJump(.tasks) }
                 }
 
                 groupLabel("Needs you")
                 LazyVGrid(columns: columns, spacing: 8) {
-                    tile("\(m.questionCount)", "questions", m.questionCount > 0 ? .orange : .secondary)
-                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary)
-                    tile("\(m.waitingCount)", "waiting", .secondary)
+                    tile("\(m.questionCount)", "questions", m.questionCount > 0 ? .orange : .secondary) { onJump(.inbox) }
+                    tile("\(m.overdueCount)", "overdue", m.overdueCount > 0 ? .red : .secondary) { onJump(.inbox) }
+                    tile("\(m.waitingCount)", "waiting", .secondary) { onJump(.inbox) }
                 }
 
                 groupLabel("Automation")
                 LazyVGrid(columns: columns, spacing: 8) {
-                    tile("\(m.activeOwnerCount)", "owners", .purple)
-                    tile("\(m.runsRunning)", "runs live", m.runsRunning > 0 ? .green : .secondary)
-                    tile("\(m.activeProjectCount)", "projects", .blue)
+                    tile("\(m.activeOwnerCount)", "owners", .purple) { onJump(.owners) }
+                    tile("\(m.runsRunning)", "runs live", m.runsRunning > 0 ? .green : .secondary) { onJump(.playbooks) }
+                    tile("\(m.activeProjectCount)", "projects", .blue) { onJump(.projects) }
                 }
 
                 if !m.topTags.isEmpty {
                     groupLabel("Top tags")
                     FlowWrap(m.topTags) { t in
                         Text("#\(t.tag) \(t.count)")
-                            .font(.system(size: 10))
-                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .font(.system(size: 11))
+                            .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(Color(nsColor: .controlBackgroundColor))
                             .clipShape(Capsule())
                     }
@@ -71,19 +72,24 @@ struct DashboardView: View {
 
     private func groupLabel(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 9, weight: .bold))
+            .font(.system(size: 10, weight: .bold))
             .foregroundStyle(.tertiary)
     }
 
-    private func tile(_ value: String, _ label: String, _ color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.system(size: 20, weight: .semibold)).foregroundStyle(color)
-            Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
+    private func tile(_ value: String, _ label: String, _ color: Color,
+                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Text(value).font(.system(size: 23, weight: .semibold)).foregroundStyle(color)
+                Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .buttonStyle(.plain)
     }
 }
 

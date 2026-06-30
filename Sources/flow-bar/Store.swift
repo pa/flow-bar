@@ -26,6 +26,11 @@ final class Store: ObservableObject {
     private let client = FlowClient()
     private var pollTask: Task<Void, Never>?
 
+    /// Menubar icon style preference, persisted across launches.
+    @Published var monochromeIcon: Bool = UserDefaults.standard.bool(forKey: "monochromeIcon") {
+        didSet { UserDefaults.standard.set(monochromeIcon, forKey: "monochromeIcon") }
+    }
+
     init() {
         startPolling()
     }
