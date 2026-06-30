@@ -44,7 +44,7 @@ final class Store: ObservableObject {
 
     /// Transient outcome of the last fire-and-forget action (switch / run),
     /// shown briefly on the menubar icon so completion isn't ambiguous.
-    enum OpResult { case success, failure }
+    enum OpResult: Equatable { case success, failure }
     @Published var recentResult: OpResult?
     private var resultResetTask: Task<Void, Never>?
 

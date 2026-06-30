@@ -15,22 +15,34 @@ struct FlowBarApp: App {
         MenuBarExtra {
             MenuContentView(store: store)
         } label: {
-            // flow brand "w" wave (colored, or monochrome template per
-            // preference). Alongside it: a spinner while a background flow
-            // command runs, then a brief check / warning when it finishes so
-            // completion isn't ambiguous after the popover closes.
-            Image(nsImage: BrandIcon.menubar(monochrome: store.monochromeIcon))
-            if store.isBusy {
-                ProgressView().controlSize(.small)
-            } else if let result = store.recentResult {
-                switch result {
-                case .success:
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                case .failure:
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-                }
-            }
+            MenuBarLabel(store: store)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// The menubar label. Extracted into its own View holding the Store as an
+/// @ObservedObject so it reliably re-renders on @Published changes (an inline
+/// label closure in the Scene does not observe reliably while the popover is
+/// closed).
+struct MenuBarLabel: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        HStack(spacing: 3) {
+            // While busy, dim the brand mark (a reliably-rendered change) and
+            // add a spinner; otherwise full-strength, with a brief check /
+            // warning flashed after a switch/run completes.
+            Image(nsImage: BrandIcon.menubar(monochrome: store.monochromeIcon))
+                .opacity(store.isBusy ? 0.35 : 1)
+
+            if store.isBusy {
+                ProgressView().controlSize(.small)
+            } else if store.recentResult == .success {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            } else if store.recentResult == .failure {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+            }
+        }
     }
 }
