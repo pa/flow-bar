@@ -24,6 +24,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover!
     private var cancellable: AnyCancellable?
 
+    /// Real animated spinner shown in place of the icon while a terminal-
+    /// spawning command runs.
+    private lazy var spinner: NSProgressIndicator = {
+        let s = NSProgressIndicator()
+        s.style = .spinning
+        s.controlSize = .small
+        s.isIndeterminate = true
+        s.isDisplayedWhenStopped = false
+        s.translatesAutoresizingMaskIntoConstraints = false
+        return s
+    }()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
@@ -37,6 +49,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.imagePosition = .imageLeading
+
+        if let button = statusItem.button {
+            button.addSubview(spinner)
+            NSLayoutConstraint.activate([
+                spinner.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                spinner.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                spinner.widthAnchor.constraint(equalToConstant: 14),
+                spinner.heightAnchor.constraint(equalToConstant: 14),
+            ])
+        }
 
         // Let switchTo() etc. close the popover for an instant-feeling action.
         Store.dismissHandler = { [weak self] in self?.popover.performClose(nil) }
@@ -61,11 +83,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateIcon() {
         guard let button = statusItem.button else { return }
-        button.image = BrandIcon.menubar(monochrome: store.monochromeIcon)
-        // Dim the whole item while a background flow command runs — a reliably
-        // visible "working" state — and show a ✓/⚠ indicator on completion.
-        button.alphaValue = store.isBusy ? 0.4 : 1.0
-        button.attributedTitle = indicator()
+        if store.isWorking {
+            // Terminal-spawning command in flight: show only the live spinner.
+            button.image = nil
+            button.attributedTitle = NSAttributedString(string: "")
+            statusItem.length = 26
+            spinner.startAnimation(nil)
+        } else {
+            spinner.stopAnimation(nil)
+            statusItem.length = NSStatusItem.variableLength
+            button.image = BrandIcon.menubar(monochrome: store.monochromeIcon)
+            button.attributedTitle = indicator()  // brief ✓ / blue ↻ / ⚠ flash
+        }
     }
 
     private func indicator() -> NSAttributedString {
@@ -75,11 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .font: NSFont.systemFont(ofSize: 11, weight: .bold),
             ])
         }
-        if store.isBusy { return tag("⟳", .secondaryLabelColor) }
         switch store.recentResult {
-        case .success: return tag("✓", .systemGreen)
-        case .failure: return tag("⚠", .systemRed)
-        case nil:      return NSAttributedString(string: "")
+        case .success:     return tag("✓", .systemGreen)
+        case .alreadyOpen: return tag("•", .systemBlue)   // already open elsewhere
+        case .failure:     return tag("⚠", .systemRed)
+        case nil:          return NSAttributedString(string: "")
         }
     }
 }

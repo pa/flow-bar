@@ -31,20 +31,17 @@ final class Store: ObservableObject {
     @Published var profiles: [Profile] = []
     @Published var activeProfileID: String = ""
 
-    /// In-flight fire-and-forget operations (switch / run / tick) that have no
-    /// dedicated loading flag. Combined with the per-section loading flags into
-    /// `isBusy`, which drives the menubar spinner.
-    @Published var busyOps = 0
+    /// In-flight operations that actually open a terminal (flow do / flow run
+    /// playbook / owner tick — NOT the routine data refreshes). Drives the
+    /// menubar loading spinner only.
+    @Published var spawningOps = 0
 
-    /// True whenever any background flow command is running.
-    var isBusy: Bool {
-        isLoading || metricsLoading || browseLoading || projectTasksLoading
-            || ownerTasksLoading || playbooksLoading || busyOps > 0
-    }
+    /// True while a terminal-spawning command is running.
+    var isWorking: Bool { spawningOps > 0 }
 
     /// Transient outcome of the last fire-and-forget action (switch / run),
     /// shown briefly on the menubar icon so completion isn't ambiguous.
-    enum OpResult: Equatable { case success, failure }
+    enum OpResult: Equatable { case success, failure, alreadyOpen }
     @Published var recentResult: OpResult?
     private var resultResetTask: Task<Void, Never>?
 
@@ -149,25 +146,30 @@ final class Store: ObservableObject {
 
     /// Run a playbook. `auto` runs headlessly; else spawns a tab.
     func runPlaybook(_ slug: String, auto: Bool = false) {
-        busyOps += 1
+        if !auto { spawningOps += 1 }   // only the new-tab path opens a terminal
         Task {
             let res = try? await Task.detached(priority: .userInitiated) {
                 try FlowClient().runPlaybook(slug, auto: auto)
             }.value
-            self.busyOps -= 1
-            self.flashResult((res?.code ?? 1) == 0 ? .success : .failure)
+            if !auto {
+                self.spawningOps -= 1
+                self.flashResult((res?.code ?? 1) == 0 ? .success : .failure)
+            }
             self.refreshPlaybooks()
         }
     }
 
     /// Tick an owner now. `auto` ticks headlessly; else spawns a tab.
     func ownerTick(_ slug: String, auto: Bool = false) {
-        busyOps += 1
+        if !auto { spawningOps += 1 }
         Task {
-            _ = try? await Task.detached(priority: .userInitiated) {
+            let res = try? await Task.detached(priority: .userInitiated) {
                 try FlowClient().ownerTick(slug, auto: auto)
             }.value
-            self.busyOps -= 1
+            if !auto {
+                self.spawningOps -= 1
+                self.flashResult((res?.code ?? 1) == 0 ? .success : .failure)
+            }
         }
     }
 
@@ -186,12 +188,11 @@ final class Store: ObservableObject {
 
     /// Pause/resume an owner (safe), then refresh metrics so status updates.
     func setOwnerPaused(_ slug: String, paused: Bool) {
-        busyOps += 1
+        // Safe, no-terminal mutation — no menubar loading indicator.
         Task {
             _ = try? await Task.detached(priority: .userInitiated) {
                 try FlowClient().setOwner(slug, paused: paused)
             }.value
-            self.busyOps -= 1
             self.refreshMetrics()
         }
     }
@@ -243,22 +244,38 @@ final class Store: ObservableObject {
     /// post-switch refresh (the next poll/open picks up any change).
     func switchTo(_ slug: String) {
         Self.dismissPopover()
-        busyOps += 1
+        spawningOps += 1
         Task {
             do {
                 let res = try await Task.detached(priority: .userInitiated) {
                     try FlowClient().doTask(slug)
                 }.value
-                // Surface a failure on the next open; don't block the switch.
-                self.errorText = res.code != 0 ? "switch to \(slug) failed: \(res.stderr)" : nil
-                self.busyOps -= 1
-                self.flashResult(res.code == 0 ? .success : .failure)
+                self.spawningOps -= 1
+                if res.code == 0 {
+                    self.errorText = nil
+                    self.flashResult(.success)
+                } else if Self.isLiveSessionGuard(res.stderr) {
+                    // Task is already open in another tab — not a failure.
+                    self.errorText = nil
+                    self.flashResult(.alreadyOpen)
+                } else {
+                    self.errorText = "switch to \(slug) failed: \(res.stderr)"
+                    self.flashResult(.failure)
+                }
             } catch {
+                self.spawningOps -= 1
                 self.errorText = String(describing: error)
-                self.busyOps -= 1
                 self.flashResult(.failure)
             }
         }
+    }
+
+    /// flow do's live-session guard: the task's session is already running
+    /// elsewhere (it names the running session and points at --force).
+    private static func isLiveSessionGuard(_ stderr: String) -> Bool {
+        let s = stderr.lowercased()
+        return s.contains("--force") || s.contains("already running")
+            || s.contains("running session") || s.contains("already open")
     }
 
     /// Close the menubar popover so an action feels instant. The AppDelegate
