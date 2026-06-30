@@ -42,8 +42,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover = NSPopover()
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 440, height: 520)
-        popover.contentViewController = NSHostingController(
-            rootView: MenuContentView(store: store))
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
@@ -76,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            // Rebuild the content fresh each open so it always starts on the
+            // In-progress tab (SwiftUI @State defaults), instead of persisting
+            // the last-viewed section.
+            popover.contentViewController = NSHostingController(
+                rootView: MenuContentView(store: store))
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             NSApp.activate(ignoringOtherApps: true)
             popover.contentViewController?.view.window?.makeKey()
