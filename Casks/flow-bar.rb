@@ -7,7 +7,7 @@ cask "flow-bar" do
   desc "Lightweight macOS menubar app for the flow dashboard + task switcher"
   homepage "https://github.com/pa/flow-bar"
 
-  depends_on macos: ">= :ventura" # macOS 13+
+  depends_on macos: :ventura # macOS 13+ (minimum)
 
   app "flow-bar.app"
 
