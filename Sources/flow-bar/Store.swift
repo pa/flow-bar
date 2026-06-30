@@ -20,7 +20,7 @@ final class Store: ObservableObject {
     @Published var metricsLoading = false
 
     private let client = FlowClient()
-    private var pollTask: Task<Void, Never>?
+    private var activeRefreshTask: Task<Void, Never>?
 
     /// Menubar icon style preference, persisted across launches.
     @Published var monochromeIcon: Bool = UserDefaults.standard.bool(forKey: "monochromeIcon") {
@@ -62,25 +62,42 @@ final class Store: ObservableObject {
 
     init() {
         loadProfiles()
-        startPolling()
+        // No background polling — refreshing only happens while the popover
+        // is open (see beginActiveRefresh).
     }
 
-    /// Number of in-progress tasks that need attention (overdue) — drives the
-    /// menubar icon badge.
+    /// Number of in-progress tasks that need attention (overdue).
     var attentionCount: Int {
         tasks.filter { $0.isOverdue }.count
     }
 
-    /// Refresh on a fixed cadence so the menubar stays current without the
-    /// popover being open. Refreshes immediately, then every `interval`.
-    func startPolling(interval: TimeInterval = 120) {
-        pollTask?.cancel()
-        pollTask = Task { [weak self] in
+    /// Called when the popover opens: refresh now, then every 60s WHILE open.
+    func beginActiveRefresh(interval: TimeInterval = 60) {
+        refresh()
+        refreshMetrics()
+        activeRefreshTask?.cancel()
+        activeRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
-                self?.refresh()
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                if Task.isCancelled { break }
+                self?.refresh()
+                self?.refreshMetrics()
             }
         }
+    }
+
+    /// Called when the popover closes: stop refreshing and free cached data so
+    /// idle RAM stays low. Nothing runs in the background while closed.
+    func endActiveRefresh() {
+        activeRefreshTask?.cancel()
+        activeRefreshTask = nil
+        tasks = []
+        metrics = nil
+        projectTasks = []
+        ownerTasks = []
+        browseTasks = []
+        playbooks = []
+        runs = []
     }
 
     /// Reload the in-progress task list.

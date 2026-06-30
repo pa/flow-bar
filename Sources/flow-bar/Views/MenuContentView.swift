@@ -70,8 +70,8 @@ struct MenuContentView: View {
         section = .tasks
         taskFilter = .inProgress
         query = ""
-        store.refresh()          // in-progress list (default view)
-        store.refreshMetrics()   // powers the rail inbox badge
+        // Data loading is driven by the AppDelegate (beginActiveRefresh) so it
+        // only runs while the popover is open.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
     }
 

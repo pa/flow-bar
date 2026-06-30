@@ -18,7 +18,7 @@ struct FlowBarApp: App {
 /// the button's image/indicator imperatively whenever the Store changes — so
 /// background activity (spinner-dim) and completion (✓/⚠) always show.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let store = Store()
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover = NSPopover()
         popover.behavior = .transient
+        popover.delegate = self
         popover.contentSize = NSSize(width: 440, height: 520)
         // One hosting controller for the app's lifetime — recreating it per
         // open caused a translucent ghost on fast outside-clicks.
@@ -78,13 +79,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            // Signal the content to reset to the In-progress tab (without
-            // recreating the view), then show.
+            // Reset to the In-progress tab, then show + start refreshing.
             store.openNonce += 1
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             NSApp.activate(ignoringOtherApps: true)
             popover.contentViewController?.view.window?.makeKey()
+            store.beginActiveRefresh()
         }
+    }
+
+    // Stop all refreshing + free caches whenever the popover closes (incl.
+    // outside-click). Nothing runs while the popover is closed.
+    func popoverDidClose(_ notification: Notification) {
+        store.endActiveRefresh()
     }
 
     private func updateIcon() {
