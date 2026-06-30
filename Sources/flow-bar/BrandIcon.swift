@@ -6,6 +6,10 @@ import AppKit
 /// @2x (height 36px); displayed ~16pt tall in the menubar, non-template so the
 /// gradient shows.
 enum BrandIcon {
+    /// Shared target height (pt) for the menubar — used by the "w" image, the
+    /// loading spinner, and the result mark so they all read the same size.
+    static let menubarHeight: CGFloat = 12
+
     static let colored: NSImage = make(template: false)
     static let monochrome: NSImage = make(template: true)
 
@@ -24,7 +28,7 @@ enum BrandIcon {
         // by height and let width follow, keeping it compact next to system
         // icons. (A copy is fine for two cached variants.)
         let copy = image.copy() as! NSImage
-        let targetHeight = 11.0
+        let targetHeight = menubarHeight
         copy.size = NSSize(
             width: targetHeight * (image.size.width / max(image.size.height, 1)),
             height: targetHeight)

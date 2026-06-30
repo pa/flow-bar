@@ -54,8 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLayoutConstraint.activate([
                 spinner.centerXAnchor.constraint(equalTo: button.centerXAnchor),
                 spinner.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                spinner.widthAnchor.constraint(equalToConstant: 14),
-                spinner.heightAnchor.constraint(equalToConstant: 14),
+                spinner.widthAnchor.constraint(equalToConstant: BrandIcon.menubarHeight),
+                spinner.heightAnchor.constraint(equalToConstant: BrandIcon.menubarHeight),
             ])
         }
 
@@ -110,9 +110,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func indicator() -> NSAttributedString {
         func tag(_ s: String, _ color: NSColor) -> NSAttributedString {
-            NSAttributedString(string: " \(s)", attributes: [
+            NSAttributedString(string: s, attributes: [
                 .foregroundColor: color,
-                .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+                .font: NSFont.systemFont(ofSize: BrandIcon.menubarHeight, weight: .bold),
             ])
         }
         switch store.recentResult {
