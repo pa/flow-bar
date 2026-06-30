@@ -60,9 +60,11 @@ struct MenuContentView: View {
             pane
         }
         .frame(width: 440, height: 520)
-        // Solid, opaque fill (no desktop bleed). The popover is forced to a
-        // dark appearance (see AppDelegate) so its arrow renders dark to match.
-        .background(Color(nsColor: .windowBackgroundColor))
+        // Explicit OPAQUE fill (not the dynamic .windowBackgroundColor, which
+        // renders translucent over the popover's vibrancy on older SDKs — so
+        // a CI build on macOS 15 looked see-through vs a local macOS 26 build).
+        // A fixed sRGB color renders identically on every SDK.
+        .background(Color(.sRGB, red: 0.114, green: 0.118, blue: 0.133, opacity: 1))
         .onAppear { prepareForOpen() }
         .onChange(of: store.openNonce) { _ in prepareForOpen() }
     }
