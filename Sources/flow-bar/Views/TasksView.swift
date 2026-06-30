@@ -25,17 +25,37 @@ struct TasksView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $filter) {
-                ForEach(TaskFilter.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden()
-            .padding(.horizontal, 10).padding(.bottom, 6)
-            .onChange(of: filter) { f in
-                if f != .inProgress { store.loadBrowse(status: f.status) }
-            }
-
+            segmentedTabs
             content
         }
+    }
+
+    /// Custom segmented control (explicit colors) so it looks identical on
+    /// every macOS/SDK — the native Picker(.segmented) restyles per OS version.
+    private var segmentedTabs: some View {
+        HStack(spacing: 2) {
+            ForEach(TaskFilter.allCases) { f in
+                Button {
+                    filter = f
+                    if f != .inProgress { store.loadBrowse(status: f.status) }
+                } label: {
+                    Text(f.rawValue)
+                        .font(.system(size: 11, weight: filter == f ? .semibold : .regular))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .foregroundStyle(filter == f ? Color.white : Color(.sRGB, white: 0.62, opacity: 1))
+                        .background(filter == f ? Theme.accent : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(Theme.track)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 10).padding(.bottom, 6)
     }
 
     @ViewBuilder

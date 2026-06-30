@@ -60,11 +60,9 @@ struct MenuContentView: View {
             pane
         }
         .frame(width: 440, height: 520)
-        // Explicit OPAQUE fill (not the dynamic .windowBackgroundColor, which
-        // renders translucent over the popover's vibrancy on older SDKs — so
-        // a CI build on macOS 15 looked see-through vs a local macOS 26 build).
-        // A fixed sRGB color renders identically on every SDK.
-        .background(Color(.sRGB, red: 0.114, green: 0.118, blue: 0.133, opacity: 1))
+        // Explicit OPAQUE fill (see Theme) — never the dynamic system colors,
+        // which render translucent over the popover's vibrancy on older SDKs.
+        .background(Theme.bg)
         .onAppear { prepareForOpen() }
         .onChange(of: store.openNonce) { _ in prepareForOpen() }
     }
@@ -180,7 +178,7 @@ struct MenuContentView: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 7)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Theme.field)
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .padding(.horizontal, 10).padding(.bottom, 6)
     }

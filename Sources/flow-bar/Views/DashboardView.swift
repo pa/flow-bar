@@ -61,7 +61,7 @@ struct DashboardView: View {
                         Text("#\(t.tag) \(t.count)")
                             .font(.system(size: 11))
                             .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(Color(nsColor: .controlBackgroundColor))
+                            .background(Theme.chip)
                             .clipShape(Capsule())
                     }
                 }
@@ -85,7 +85,7 @@ struct DashboardView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            .background(Theme.tile)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
