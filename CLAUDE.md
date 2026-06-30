@@ -40,9 +40,17 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
   - `FlowBarApp.swift` — `@main` + `MenuBarExtra` (`.window` style; `.accessory`
     activation policy / `LSUIElement` = menubar agent, no dock icon).
   - `Store.swift` — `@MainActor ObservableObject` (macOS 13 compatible, not the
-    macOS 14 `@Observable` macro). Polls tasks every 20s; loads team on demand.
-  - `Views/` — `MenuContentView` (header, Tasks/Team toggle, search, footer),
-    `TaskRow`, `TeamView`.
+    macOS 14 `@Observable` macro). Polls the in-progress list every 60s
+    (instant on open + after switch); team/metrics/playbooks/owner-tasks load
+    on demand.
+  - `BrandIcon.swift` — flow's "w" wave (from the public repo's
+    `assets/flow-logo.svg`) embedded as base64, sized ~11pt for the menubar.
+  - `Views/` — `MenuContentView` is the root: left **icon rail** + content
+    pane (per-section global search, header, footer). Sections: `TasksView`
+    (home), `InboxView` ("Needs you": owner questions + overdue + waiting),
+    `DashboardView` (metric tiles), `ProjectsView` (drill into a project's
+    tasks), `PlaybooksView` (runs + Run), `OwnersView` (questions/tasks +
+    pause/resume), `TeamView`. Plus `TaskRow`.
 - **`flowbar-smoke`** (executable): data-path verification.
 
 ## How "switch to a task" works
@@ -68,8 +76,17 @@ the spawn (hand-rolling a resume can't focus a specific existing tab).
 - flow binaries live at `~/.local/bin/flow` and `~/go/bin/flow-workspace`;
   `FlowClient.searchPATH` lists the dirs we probe.
 
+## Read-mostly philosophy
+
+The app favours rich read views + only **safe** mutations inline (owner
+pause/resume). Actions that spawn a terminal — switching to a task
+(`flow do`) and running a playbook (`flow run playbook`) — are explicit,
+user-initiated, and need the one-time Accessibility grant.
+
 ## Status
 
-v1 phases 1–6 complete: data layer, menubar shell, search switcher, polling +
-due badge + dynamic icon, team view, docs. Tracked in flow as task `flow-bar`
-(project `side-quests`, `#flow`).
+Phases 1–11 complete. v1 (P1–6): data layer, menubar shell, search switcher,
+polling + due badge, team view, docs. Expansion (P7–11): icon-rail nav +
+metrics dashboard + brand "w" icon, Needs-you inbox, Projects drill-in,
+Playbooks, Owners. Tracked in flow as task `flow-bar` (project `side-quests`,
+`#flow`).
