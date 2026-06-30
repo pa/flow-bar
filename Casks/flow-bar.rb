@@ -1,6 +1,6 @@
 cask "flow-bar" do
   version "0.1.0"
-  sha256 :no_check # replaced with the real checksum by the release workflow
+  sha256 "2f1430b4468d6bab4b2840ba554c83b033aa0af498065ffd1e9c5dbf86884079"
 
   url "https://github.com/pa/flow-bar/releases/download/v#{version}/flow-bar.zip"
   name "flow-bar"
