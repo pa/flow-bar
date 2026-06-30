@@ -90,11 +90,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.attributedTitle = NSAttributedString(string: "")
             statusItem.length = 26
             spinner.startAnimation(nil)
+        } else if store.recentResult != nil {
+            // Completion flash: show ONLY the result mark; the "w" returns
+            // once it clears (spinner -> mark -> icon, never side by side).
+            spinner.stopAnimation(nil)
+            button.image = nil
+            statusItem.length = 26
+            button.attributedTitle = indicator()
         } else {
             spinner.stopAnimation(nil)
             statusItem.length = NSStatusItem.variableLength
+            button.attributedTitle = NSAttributedString(string: "")
             button.image = BrandIcon.menubar(monochrome: store.monochromeIcon)
-            button.attributedTitle = indicator()  // brief ✓ / blue ↻ / ⚠ flash
         }
     }
 
