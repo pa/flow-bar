@@ -75,6 +75,14 @@ struct OwnersView: View {
                     }
                 }.buttonStyle(.plain)
                 Spacer()
+                Menu {
+                    Button("Tick now (new tab)") { store.ownerTick(o.slug) }
+                    Button("Tick in background (--auto)") { store.ownerTick(o.slug, auto: true) }
+                } label: {
+                    Label("Tick", systemImage: "bolt.fill").font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton).controlSize(.small).fixedSize()
+                .help("Wake this owner now")
                 Button {
                     store.setOwnerPaused(o.slug, paused: o.status == "active")
                     selected = nil

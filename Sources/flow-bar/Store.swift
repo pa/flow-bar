@@ -97,6 +97,24 @@ final class Store: ObservableObject {
     @Published var ownerTasks: [FlowTask] = []
     @Published var ownerTasksLoading = false
 
+    // Task list filtered by a non-in-progress status (backlog/done/all).
+    // In-progress uses `tasks` (polled live); other filters use this.
+    @Published var browseTasks: [FlowTask] = []
+    @Published var browseLoading = false
+
+    /// Load tasks for a status filter other than in-progress (nil = all).
+    func loadBrowse(status: String?) {
+        browseLoading = true
+        browseTasks = []
+        Task {
+            let r = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listTasks(status: status)
+            }.value) ?? []
+            self.browseTasks = r
+            self.browseLoading = false
+        }
+    }
+
     /// Load playbook definitions + runs for the Playbooks section.
     func refreshPlaybooks() {
         playbooksLoading = true
@@ -113,13 +131,22 @@ final class Store: ObservableObject {
         }
     }
 
-    /// Run a playbook (spawns a tab). Manual/explicit only.
-    func runPlaybook(_ slug: String) {
+    /// Run a playbook. `auto` runs headlessly; else spawns a tab.
+    func runPlaybook(_ slug: String, auto: Bool = false) {
         Task {
             _ = try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().runPlaybook(slug)
+                try FlowClient().runPlaybook(slug, auto: auto)
             }.value
             self.refreshPlaybooks()
+        }
+    }
+
+    /// Tick an owner now. `auto` ticks headlessly; else spawns a tab.
+    func ownerTick(_ slug: String, auto: Bool = false) {
+        Task {
+            _ = try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().ownerTick(slug, auto: auto)
+            }.value
         }
     }
 

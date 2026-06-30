@@ -1,27 +1,70 @@
 import FlowBarCore
 import SwiftUI
 
-/// The in-progress task list, filtered by the global search query.
+enum TaskFilter: String, CaseIterable, Identifiable {
+    case inProgress = "In progress", backlog = "Backlog", done = "Done", all = "All"
+    var id: String { rawValue }
+    /// flow --status value (nil = all).
+    var status: String? {
+        switch self {
+        case .inProgress: return "in-progress"
+        case .backlog: return "backlog"
+        case .done: return "done"
+        case .all: return nil
+        }
+    }
+}
+
+/// The task list, with a status filter and the global search query.
+/// In-progress uses the live polled list; other filters load on demand.
 struct TasksView: View {
     @ObservedObject var store: Store
     let query: String
 
+    @State private var filter: TaskFilter = .inProgress
+
     var body: some View {
-        Group {
-            if let error = store.errorText, store.tasks.isEmpty {
-                errorBanner(error)
-            } else if store.tasks.isEmpty {
-                centered("No in-progress tasks")
-            } else if filtered.isEmpty {
-                centered("No matches for “\(query)”")
-            } else {
-                list
+        VStack(spacing: 0) {
+            Picker("", selection: $filter) {
+                ForEach(TaskFilter.allCases) { Text($0.rawValue).tag($0) }
             }
+            .pickerStyle(.segmented).labelsHidden()
+            .padding(.horizontal, 10).padding(.bottom, 6)
+            .onChange(of: filter) { f in
+                if f != .inProgress { store.loadBrowse(status: f.status) }
+            }
+
+            content
         }
     }
 
+    @ViewBuilder
+    private var content: some View {
+        if isLoading {
+            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = store.errorText, source.isEmpty {
+            errorBanner(error)
+        } else if source.isEmpty {
+            centered("No \(filter.rawValue.lowercased()) tasks")
+        } else if filtered.isEmpty {
+            centered("No matches for “\(query)”")
+        } else {
+            list
+        }
+    }
+
+    /// The unfiltered source list for the current filter.
+    private var source: [FlowTask] {
+        filter == .inProgress ? store.tasks : store.browseTasks
+    }
+
+    private var isLoading: Bool {
+        filter == .inProgress ? store.isLoading : store.browseLoading
+    }
+
     private var filtered: [FlowTask] {
-        store.tasks.filtered(by: query).sortedByPriority()
+        let base = source.filtered(by: query)
+        return filter == .inProgress ? base.sortedByPriority() : base.sortedByStatusThenPriority()
     }
 
     private var list: some View {

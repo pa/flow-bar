@@ -278,10 +278,26 @@ public struct FlowClient: Sendable {
         return (stderr, code)
     }
 
-    /// Run a playbook (spawns a new tab; manual/explicit only).
+    /// Run a playbook. `auto` runs it headlessly in the background (no tab);
+    /// otherwise spawns a new tab. Manual/explicit only.
     @discardableResult
-    public func runPlaybook(_ slug: String) throws -> (stderr: String, code: Int32) {
-        let (_, stderr, code) = try Self.run("flow", ["run", "playbook", slug])
+    public func runPlaybook(_ slug: String, auto: Bool = false) throws
+        -> (stderr: String, code: Int32)
+    {
+        var args = ["run", "playbook", slug]
+        if auto { args.append("--auto") }
+        let (_, stderr, code) = try Self.run("flow", args)
+        return (stderr, code)
+    }
+
+    /// Wake an owner now. `auto` ticks headlessly; otherwise spawns a tab.
+    @discardableResult
+    public func ownerTick(_ slug: String, auto: Bool = false) throws
+        -> (stderr: String, code: Int32)
+    {
+        var args = ["owner", "tick", slug]
+        if auto { args.append("--auto") }
+        let (_, stderr, code) = try Self.run("flow", args)
         return (stderr, code)
     }
 

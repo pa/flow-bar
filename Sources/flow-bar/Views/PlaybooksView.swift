@@ -84,11 +84,16 @@ struct PlaybooksView: View {
                     }
                 }.buttonStyle(.plain)
                 Spacer()
-                Button { store.runPlaybook(p.slug) } label: {
+                Menu {
+                    Button("Run in a new tab") { store.runPlaybook(p.slug) }
+                    Button("Run in background (--auto)") { store.runPlaybook(p.slug, auto: true) }
+                } label: {
                     Label("Run", systemImage: "play.fill").font(.system(size: 11))
                 }
+                .menuStyle(.borderlessButton)
                 .controlSize(.small)
-                .help("Run this playbook (opens a tab)")
+                .fixedSize()
+                .help("Run this playbook")
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             Divider()
