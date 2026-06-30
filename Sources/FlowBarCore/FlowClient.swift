@@ -1,4 +1,14 @@
+import Darwin
 import Foundation
+
+// Private SPI: mark a posix_spawn'd child as its OWN responsible process for
+// TCC. macOS otherwise attributes a child's automation (e.g. flow opening a
+// terminal) back to the parent GUI app (flow-bar) — so flow-bar would need the
+// Accessibility/Automation grant. Disclaiming makes `flow` responsible, so flow
+// "takes care of it" exactly as when you run it in a terminal.
+@_silgen_name("responsibility_spawnattrs_setdisclaim")
+private func responsibility_spawnattrs_setdisclaim(
+    _ attr: UnsafeMutablePointer<posix_spawnattr_t?>, _ disclaim: Int32) -> Int32
 
 /// Errors surfaced by the flow CLI bridge.
 public enum FlowClientError: Error, CustomStringConvertible {
@@ -93,6 +103,57 @@ public struct FlowClient: Sendable {
 
         let stderr = String(data: errData, encoding: .utf8) ?? ""
         return (outData, stderr, process.terminationStatus)
+    }
+
+    /// Append a line to ~/Library/Logs/flow-bar.log so we can see exactly how
+    /// the app invokes flow.
+    static func log(_ message: String) {
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+        let path = NSHomeDirectory() + "/Library/Logs/flow-bar.log"
+        guard let data = line.data(using: .utf8) else { return }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    /// Launch a flow subcommand that opens a terminal (do / run / tick) with TCC
+    /// responsibility DISCLAIMED, so `flow` — not flow-bar — is the responsible
+    /// process for the terminal it opens. Fire-and-forget.
+    static func spawnDisclaimed(_ binaryName: String, _ args: [String]) throws {
+        let path = try resolve(binaryName)
+
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+        _ = responsibility_spawnattrs_setdisclaim(&attr, 1)
+
+        var envDict = ProcessInfo.processInfo.environment
+        envDict["PATH"] = searchPATH
+        if let root = UserDefaults.standard.string(forKey: activeFlowRootKey), !root.isEmpty {
+            envDict["FLOW_ROOT"] = (root as NSString).expandingTildeInPath
+        } else {
+            envDict.removeValue(forKey: "FLOW_ROOT")
+        }
+
+        let argv: [UnsafeMutablePointer<CChar>?] = ([path] + args).map { strdup($0) } + [nil]
+        let envp: [UnsafeMutablePointer<CChar>?] = envDict.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            for p in argv where p != nil { free(p) }
+            for p in envp where p != nil { free(p) }
+        }
+
+        var pid: pid_t = 0
+        let rc = posix_spawn(&pid, path, nil, &attr, argv, envp)
+        log("spawnDisclaimed: \(binaryName) \(args.joined(separator: " "))  ->  rc=\(rc) pid=\(pid)  FLOW_ROOT=\(envDict["FLOW_ROOT"] ?? "<default>")")
+        guard rc == 0 else {
+            throw FlowClientError.commandFailed(
+                command: "\(binaryName) \(args.joined(separator: " "))",
+                code: rc, stderr: String(cString: strerror(rc)))
+        }
+        // Reap the short-lived child (flow exits after opening the terminal).
+        DispatchQueue.global().async { var s: Int32 = 0; waitpid(pid, &s, 0) }
     }
 
     // MARK: Reads
@@ -222,8 +283,8 @@ public struct FlowClient: Sendable {
     /// (Phase 3 wires this to the UI; defined here so the bridge is complete.)
     @discardableResult
     public func doTask(_ slug: String) throws -> (stderr: String, code: Int32) {
-        let (_, stderr, code) = try Self.run("flow", ["do", slug])
-        return (stderr, code)
+        try Self.spawnDisclaimed("flow", ["do", slug])  // flow owns the terminal it opens
+        return ("", 0)
     }
 
     /// Run a playbook. `auto` runs it headlessly in the background (no tab);
@@ -232,10 +293,12 @@ public struct FlowClient: Sendable {
     public func runPlaybook(_ slug: String, auto: Bool = false) throws
         -> (stderr: String, code: Int32)
     {
-        var args = ["run", "playbook", slug]
-        if auto { args.append("--auto") }
-        let (_, stderr, code) = try Self.run("flow", args)
-        return (stderr, code)
+        if auto {  // headless, no terminal — capture normally
+            let (_, stderr, code) = try Self.run("flow", ["run", "playbook", slug, "--auto"])
+            return (stderr, code)
+        }
+        try Self.spawnDisclaimed("flow", ["run", "playbook", slug])
+        return ("", 0)
     }
 
     /// Wake an owner now. `auto` ticks headlessly; otherwise spawns a tab.
@@ -243,10 +306,12 @@ public struct FlowClient: Sendable {
     public func ownerTick(_ slug: String, auto: Bool = false) throws
         -> (stderr: String, code: Int32)
     {
-        var args = ["owner", "tick", slug]
-        if auto { args.append("--auto") }
-        let (_, stderr, code) = try Self.run("flow", args)
-        return (stderr, code)
+        if auto {  // headless, no terminal — capture normally
+            let (_, stderr, code) = try Self.run("flow", ["owner", "tick", slug, "--auto"])
+            return (stderr, code)
+        }
+        try Self.spawnDisclaimed("flow", ["owner", "tick", slug])
+        return ("", 0)
     }
 
     /// Pause or resume an owner — safe, no-spawn mutations.
