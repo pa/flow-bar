@@ -77,7 +77,7 @@ struct MenuContentView: View {
                 } label: {
                     Image(systemName: s.icon)
                         .font(.system(size: 15))
-                        .frame(width: 34, height: 30)
+                        .frame(maxWidth: .infinity, minHeight: 32)
                         .background(section == s ? Color.accentColor.opacity(0.2) : .clear)
                         .foregroundStyle(section == s ? Color.accentColor : .secondary)
                         .clipShape(RoundedRectangle(cornerRadius: 7))
@@ -91,6 +91,8 @@ struct MenuContentView: View {
                                     .offset(x: -2, y: 2)
                             }
                         }
+                        // Make the whole cell clickable, not just the glyph.
+                        .contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
                 .help(s.title)
