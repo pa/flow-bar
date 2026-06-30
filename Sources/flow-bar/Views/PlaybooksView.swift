@@ -105,13 +105,20 @@ struct PlaybooksView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(rs) { run in
-                            HStack(spacing: 6) {
-                                statusDot(run.status)
-                                Text(run.slug).font(.system(size: 12)).lineLimit(1)
-                                Spacer()
-                                Text(run.status).font(.system(size: 11)).foregroundStyle(.secondary)
+                            Button { store.switchTo(run.slug) } label: {
+                                HStack(spacing: 6) {
+                                    statusDot(run.status)
+                                    Text(run.slug).font(.system(size: 12)).lineLimit(1)
+                                    Spacer()
+                                    Text(run.status).font(.system(size: 11)).foregroundStyle(.secondary)
+                                    Image(systemName: "arrow.up.forward.app")
+                                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal, 12).padding(.vertical, 3)
                             }
-                            .padding(.horizontal, 12).padding(.vertical, 2)
+                            .buttonStyle(.plain)
+                            .help("Open this run in the terminal")
                         }
                     }
                     .padding(.vertical, 4)
