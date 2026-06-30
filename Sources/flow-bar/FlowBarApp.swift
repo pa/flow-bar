@@ -42,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover = NSPopover()
         popover.behavior = .transient
         popover.delegate = self
+        // No open/close animation — an interrupted animation (fast click) is
+        // what leaves the translucent ghost window. Instant show/hide avoids it.
+        popover.animates = false
         popover.contentSize = NSSize(width: 440, height: 520)
         // One hosting controller for the app's lifetime — recreating it per
         // open caused a translucent ghost on fast outside-clicks.
