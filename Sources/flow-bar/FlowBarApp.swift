@@ -15,14 +15,11 @@ struct FlowBarApp: App {
         MenuBarExtra {
             MenuContentView(store: store)
         } label: {
-            // Show an overdue count next to the icon when something needs
-            // attention, so the menubar surfaces state without a click.
-            let count = store.attentionCount
-            Image(systemName: count > 0
-                  ? "exclamationmark.triangle.fill"
-                  : "point.3.connected.trianglepath.dotted")
-            if count > 0 {
-                Text("\(count)")
+            // flow's brand "w" wave; an overdue count rides alongside when
+            // something needs attention, so the menubar surfaces state.
+            Image(nsImage: BrandIcon.menubar)
+            if store.attentionCount > 0 {
+                Text("\(store.attentionCount)")
             }
         }
         .menuBarExtraStyle(.window)

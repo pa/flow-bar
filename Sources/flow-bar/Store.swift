@@ -18,6 +18,11 @@ final class Store: ObservableObject {
     @Published var teamError: String?
     @Published var teamLoading = false
 
+    // Dashboard metrics — aggregated from local CLI calls, on demand.
+    @Published var metrics: DashboardMetrics?
+    @Published var metricsError: String?
+    @Published var metricsLoading = false
+
     private let client = FlowClient()
     private var pollTask: Task<Void, Never>?
 
@@ -76,6 +81,26 @@ final class Store: ObservableObject {
                 self.teamError = String(describing: error)
             }
             self.teamLoading = false
+        }
+    }
+
+    /// Aggregate dashboard metrics (all local CLI calls). On demand.
+    func refreshMetrics() {
+        metricsLoading = true
+        Task {
+            do {
+                let m = try await Task.detached(priority: .userInitiated) {
+                    try FlowClient().dashboardMetrics()
+                }.value
+                self.metrics = m
+                self.metricsError = nil
+                // Keep the in-progress list (and icon badge) in sync for free.
+                self.tasks = m.inProgress
+                self.lastUpdated = Date()
+            } catch {
+                self.metricsError = String(describing: error)
+            }
+            self.metricsLoading = false
         }
     }
 

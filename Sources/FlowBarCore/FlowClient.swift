@@ -88,12 +88,10 @@ public struct FlowClient: Sendable {
 
     // MARK: Reads
 
-    /// Decode `flow list tasks ... --format json` into `[FlowTask]`.
-    public func listTasks(status: String? = nil) throws -> [FlowTask] {
-        var args = ["list", "tasks"]
-        if let status { args += ["--status", status] }
-        args += ["--format", "json"]
-
+    /// Run a flow subcommand expected to emit JSON, decode into `T`.
+    private func decodeJSON<T: Decodable>(
+        _ type: T.Type, _ args: [String]
+    ) throws -> T {
         let (data, stderr, code) = try Self.run("flow", args)
         guard code == 0 else {
             throw FlowClientError.commandFailed(
@@ -101,7 +99,7 @@ public struct FlowClient: Sendable {
                 code: code, stderr: stderr)
         }
         do {
-            return try JSONDecoder().decode([FlowTask].self, from: data)
+            return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw FlowClientError.decodeFailed(
                 underlying: error,
@@ -109,8 +107,94 @@ public struct FlowClient: Sendable {
         }
     }
 
+    /// Decode `flow list tasks ... --format json` into `[FlowTask]`.
+    public func listTasks(status: String? = nil, tag: String? = nil) throws -> [FlowTask] {
+        var args = ["list", "tasks"]
+        if let status { args += ["--status", status] }
+        if let tag { args += ["--tag", tag] }
+        args += ["--format", "json"]
+        return try decodeJSON([FlowTask].self, args)
+    }
+
     public func inProgressTasks() throws -> [FlowTask] {
         try listTasks(status: "in-progress")
+    }
+
+    public func listProjects() throws -> [Project] {
+        try decodeJSON([Project].self, ["list", "projects", "--format", "json"])
+    }
+
+    public func listPlaybooks() throws -> [Playbook] {
+        try decodeJSON([Playbook].self, ["list", "playbooks", "--format", "json"])
+    }
+
+    public func listRuns() throws -> [PlaybookRun] {
+        try decodeJSON([PlaybookRun].self, ["list", "runs", "--format", "json"])
+    }
+
+    /// `flow owner list` — text only. Header row then
+    /// `slug  status  every  <iso>  (in ...)`.
+    public func listOwners() throws -> [Owner] {
+        let (data, stderr, code) = try Self.run("flow", ["owner", "list"])
+        guard code == 0 else {
+            throw FlowClientError.commandFailed(
+                command: "flow owner list", code: code, stderr: stderr)
+        }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        var owners: [Owner] = []
+        for raw in text.split(separator: "\n") {
+            let line = String(raw)
+            let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                .map(String.init).filter { !$0.isEmpty }
+            guard let first = fields.first, first != "SLUG" else { continue }
+            guard fields.count >= 3 else { continue }
+            // After the iso timestamp, the rest is "(in 1h59m0s)".
+            let iso = fields.count > 3 ? fields[3] : nil
+            let rel = fields.count > 4
+                ? fields[4...].joined(separator: " ")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+                : nil
+            owners.append(Owner(slug: fields[0], status: fields[1],
+                                every: fields[2], nextTick: iso,
+                                nextTickRelative: rel))
+        }
+        return owners
+    }
+
+    /// `flow list tags` — text only. Header row then `#tag  N tasks`.
+    public func listTags() throws -> [TagCount] {
+        let (data, stderr, code) = try Self.run("flow", ["list", "tags"])
+        guard code == 0 else {
+            throw FlowClientError.commandFailed(
+                command: "flow list tags", code: code, stderr: stderr)
+        }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        var tags: [TagCount] = []
+        for raw in text.split(separator: "\n") {
+            let fields = String(raw).split(whereSeparator: { $0 == " " || $0 == "\t" })
+                .map(String.init).filter { !$0.isEmpty }
+            guard let first = fields.first, first != "TAG", fields.count >= 2 else { continue }
+            let tag = first.hasPrefix("#") ? String(first.dropFirst()) : first
+            let count = Int(fields[1]) ?? 0
+            tags.append(TagCount(tag: tag, count: count))
+        }
+        return tags
+    }
+
+    /// Build the Dashboard metrics in one shot (all local CLI calls).
+    public func dashboardMetrics() throws -> DashboardMetrics {
+        let ip = try inProgressTasks()
+        let backlog = (try? listTasks(status: "backlog").count) ?? 0
+        let done = (try? listTasks(status: "done").count) ?? 0
+        let projects = (try? listProjects()) ?? []
+        let runs = (try? listRuns()) ?? []
+        let owners = (try? listOwners()) ?? []
+        let tags = (try? listTags()) ?? []
+        let questions = (try? listTasks(tag: "question")) ?? []
+        return DashboardMetrics(
+            inProgress: ip, backlogCount: backlog, doneCount: done,
+            projects: projects, runs: runs, owners: owners, tags: tags,
+            questions: questions)
     }
 
     /// Parse `flow-workspace activity` text into members + their tasks.
