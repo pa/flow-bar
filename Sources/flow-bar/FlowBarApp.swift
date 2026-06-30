@@ -42,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover = NSPopover()
         popover.behavior = .transient
         popover.delegate = self
+        // Force dark appearance so the arrow/beak chrome renders dark to match
+        // the opaque content (instead of picking up the desktop behind it).
+        popover.appearance = NSAppearance(named: .darkAqua)
         // No open/close animation — an interrupted animation (fast click) is
         // what leaves the translucent ghost window. Instant show/hide avoids it.
         popover.animates = false

@@ -10,6 +10,8 @@
     <string>flow-bar</string>
     <key>CFBundleDisplayName</key>
     <string>Flow</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

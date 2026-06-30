@@ -60,9 +60,9 @@ struct MenuContentView: View {
             pane
         }
         .frame(width: 440, height: 520)
-        // Use the same .popover material AppKit draws the popover + its arrow
-        // with, so the content and the beak match (no seam, no desktop bleed).
-        .background(VisualEffect().ignoresSafeArea())
+        // Solid, opaque fill (no desktop bleed). The popover is forced to a
+        // dark appearance (see AppDelegate) so its arrow renders dark to match.
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { prepareForOpen() }
         .onChange(of: store.openNonce) { _ in prepareForOpen() }
     }

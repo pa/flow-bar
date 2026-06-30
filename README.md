@@ -4,7 +4,11 @@ A lightweight, native macOS **menubar app** for [flow](https://github.com/Facets
 see what's in flight and switch between tasks without leaving the menubar.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="flow-bar demo" width="420">
+  <a href="https://pa.github.io/flow-bar/">
+    <img src="docs/demo-poster.jpg" alt="flow-bar — menubar popover" width="380">
+  </a>
+  <br>
+  <em><a href="https://pa.github.io/flow-bar/">▶ Watch the demo</a></em>
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

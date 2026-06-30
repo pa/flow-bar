@@ -14,5 +14,12 @@ cask "flow-bar" do
   caveats <<~EOS
     flow-bar is a companion to the `flow` CLI — install it from
     https://github.com/Facets-cloud/flow and make sure it's on your PATH.
+
+    This build is not yet notarized, so macOS Gatekeeper will block the first
+    launch. Allow it with:
+
+      xattr -dr com.apple.quarantine "#{appdir}/flow-bar.app"
+
+    then open flow-bar again.
   EOS
 end
