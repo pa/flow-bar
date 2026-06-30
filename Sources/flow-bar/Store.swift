@@ -38,7 +38,7 @@ final class Store: ObservableObject {
 
     /// Refresh on a fixed cadence so the menubar stays current without the
     /// popover being open. Refreshes immediately, then every `interval`.
-    func startPolling(interval: TimeInterval = 20) {
+    func startPolling(interval: TimeInterval = 60) {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {

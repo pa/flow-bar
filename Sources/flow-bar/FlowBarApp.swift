@@ -15,12 +15,9 @@ struct FlowBarApp: App {
         MenuBarExtra {
             MenuContentView(store: store)
         } label: {
-            // flow's brand "w" wave; an overdue count rides alongside when
-            // something needs attention, so the menubar surfaces state.
+            // Static flow brand "w" wave. (Attention counts live on the
+            // Needs-you rail badge inside the popover, not the menubar.)
             Image(nsImage: BrandIcon.menubar)
-            if store.attentionCount > 0 {
-                Text("\(store.attentionCount)")
-            }
         }
         .menuBarExtraStyle(.window)
     }

@@ -14,7 +14,7 @@ enum BrandIcon {
         // Menubar icons read best ~13-14pt tall; the "w" is ~2:1 so we size
         // by height and let width follow, keeping it compact next to system
         // icons.
-        let targetHeight = 13.0
+        let targetHeight = 11.0
         image.size = NSSize(
             width: targetHeight * (image.size.width / max(image.size.height, 1)),
             height: targetHeight)

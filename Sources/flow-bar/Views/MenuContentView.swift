@@ -44,7 +44,7 @@ enum Section: String, CaseIterable, Identifiable {
 struct MenuContentView: View {
     @ObservedObject var store: Store
 
-    @State private var section: Section = .dashboard
+    @State private var section: Section = .tasks
     @State private var query: String = ""
     @FocusState private var searchFocused: Bool
 
@@ -55,7 +55,11 @@ struct MenuContentView: View {
             pane
         }
         .frame(width: 440, height: 520)
-        .onAppear { store.refreshMetrics() }
+        .onAppear {
+            store.refresh()          // in-progress list (default view)
+            store.refreshMetrics()   // powers the rail inbox badge
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
+        }
     }
 
     // MARK: Rail
@@ -73,6 +77,16 @@ struct MenuContentView: View {
                         .background(section == s ? Color.accentColor.opacity(0.2) : .clear)
                         .foregroundStyle(section == s ? Color.accentColor : .secondary)
                         .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .overlay(alignment: .topTrailing) {
+                            if let n = railBadge(s), n > 0 {
+                                Text("\(n)")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 3).padding(.vertical, 1)
+                                    .background(Circle().fill(.red).scaleEffect(1.3))
+                                    .offset(x: -2, y: 2)
+                            }
+                        }
                 }
                 .buttonStyle(.plain)
                 .help(s.title)
@@ -105,9 +119,16 @@ struct MenuContentView: View {
         case .dashboard: DashboardView(store: store)
         case .tasks:     TasksView(store: store, query: query)
         case .team:      TeamView(store: store)
-        case .inbox, .playbooks, .projects, .owners:
+        case .inbox:     InboxView(store: store)
+        case .playbooks, .projects, .owners:
             comingSoon(section.title)
         }
+    }
+
+    /// Red count badge on a rail icon (currently the Needs-you inbox).
+    private func railBadge(_ s: Section) -> Int? {
+        guard s == .inbox, let m = store.metrics else { return nil }
+        return m.questionCount + m.overdueCount
     }
 
     private func comingSoon(_ title: String) -> some View {
@@ -203,6 +224,10 @@ struct MenuContentView: View {
         case .team:
             let n = store.teamMembers.reduce(0) { $0 + $1.tasks.count }
             return store.teamMembers.isEmpty ? "" : "\(n)"
+        case .inbox:
+            guard let m = store.metrics else { return "" }
+            let n = m.questionCount + m.overdueCount + m.waitingCount
+            return n > 0 ? "\(n)" : ""
         default:
             return ""
         }
