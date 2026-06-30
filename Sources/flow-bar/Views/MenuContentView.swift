@@ -219,10 +219,6 @@ struct MenuContentView: View {
 
             Spacer()
 
-            if let updated = store.lastUpdated {
-                Text(updated.formatted(date: .omitted, time: .standard))
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
         }
