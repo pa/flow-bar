@@ -37,6 +37,11 @@ public enum FlowClientError: Error, CustomStringConvertible {
 /// client reads on every invocation. Shared so detached calls stay correct.
 public let activeFlowRootKey = "activeFlowRoot"
 
+/// UserDefaults key for the preferred flow terminal backend (FLOW_TERM). Set
+/// by the app so flow opens tabs in the user's terminal (e.g. zellij) even
+/// when launched from the GUI, where $ZELLIJ/$TERM_PROGRAM aren't inherited.
+public let flowTermKey = "flowTerm"
+
 public struct FlowClient: Sendable {
     /// A generous PATH so GUI launches (which inherit a minimal environment)
     /// can still find flow, claude, git, etc.
@@ -120,8 +125,12 @@ public struct FlowClient: Sendable {
 
     /// Launch a flow subcommand that opens a terminal (do / run / tick) with TCC
     /// responsibility DISCLAIMED, so `flow` — not flow-bar — is the responsible
-    /// process for the terminal it opens. Fire-and-forget.
-    static func spawnDisclaimed(_ binaryName: String, _ args: [String]) throws {
+    /// process for the terminal it opens. BLOCKS until the flow process exits
+    /// (it exits right after opening/focusing the tab) and returns its exit
+    /// code — callers run this off the main actor and use the code to drive the
+    /// menubar spinner→✓ so completion isn't signalled before the tab opens.
+    @discardableResult
+    static func spawnDisclaimed(_ binaryName: String, _ args: [String]) throws -> Int32 {
         let path = try resolve(binaryName)
 
         var attr: posix_spawnattr_t?
@@ -135,6 +144,11 @@ public struct FlowClient: Sendable {
             envDict["FLOW_ROOT"] = (root as NSString).expandingTildeInPath
         } else {
             envDict.removeValue(forKey: "FLOW_ROOT")
+        }
+        // Tell flow which terminal backend to use (GUI launches don't inherit
+        // $ZELLIJ/$TERM_PROGRAM). flow honors $FLOW_TERM as a backend override.
+        if let term = UserDefaults.standard.string(forKey: flowTermKey), !term.isEmpty {
+            envDict["FLOW_TERM"] = term
         }
 
         let argv: [UnsafeMutablePointer<CChar>?] = ([path] + args).map { strdup($0) } + [nil]
@@ -152,8 +166,13 @@ public struct FlowClient: Sendable {
                 command: "\(binaryName) \(args.joined(separator: " "))",
                 code: rc, stderr: String(cString: strerror(rc)))
         }
-        // Reap the short-lived child (flow exits after opening the terminal).
-        DispatchQueue.global().async { var s: Int32 = 0; waitpid(pid, &s, 0) }
+        // Wait for the short-lived child (flow exits after opening/focusing the
+        // terminal) so the caller only signals completion once the tab is up.
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
+        // Decode the wait status into a conventional exit code.
+        if (status & 0x7f) == 0 { return (status >> 8) & 0xff }  // WIFEXITED → WEXITSTATUS
+        return 1  // killed by a signal → treat as failure
     }
 
     // MARK: Reads
@@ -283,8 +302,8 @@ public struct FlowClient: Sendable {
     /// (Phase 3 wires this to the UI; defined here so the bridge is complete.)
     @discardableResult
     public func doTask(_ slug: String) throws -> (stderr: String, code: Int32) {
-        try Self.spawnDisclaimed("flow", ["do", slug])  // flow owns the terminal it opens
-        return ("", 0)
+        let code = try Self.spawnDisclaimed("flow", ["do", slug])  // flow owns the terminal it opens
+        return ("", code)
     }
 
     /// Run a playbook. `auto` runs it headlessly in the background (no tab);
@@ -297,8 +316,8 @@ public struct FlowClient: Sendable {
             let (_, stderr, code) = try Self.run("flow", ["run", "playbook", slug, "--auto"])
             return (stderr, code)
         }
-        try Self.spawnDisclaimed("flow", ["run", "playbook", slug])
-        return ("", 0)
+        let code = try Self.spawnDisclaimed("flow", ["run", "playbook", slug])
+        return ("", code)
     }
 
     /// Wake an owner now. `auto` ticks headlessly; otherwise spawns a tab.
@@ -310,8 +329,8 @@ public struct FlowClient: Sendable {
             let (_, stderr, code) = try Self.run("flow", ["owner", "tick", slug, "--auto"])
             return (stderr, code)
         }
-        try Self.spawnDisclaimed("flow", ["owner", "tick", slug])
-        return ("", 0)
+        let code = try Self.spawnDisclaimed("flow", ["owner", "tick", slug])
+        return ("", code)
     }
 
     /// Pause or resume an owner — safe, no-spawn mutations.

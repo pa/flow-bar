@@ -36,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return s
     }()
 
+    /// Global mouse monitor that closes the popover on an outside click — a
+    /// belt-and-braces for when .transient dismissal breaks after a nested
+    /// SwiftUI Menu (the footer flow-root / Terminal menus) runs its own loop.
+    private var outsideClickMonitor: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
@@ -91,12 +96,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             NSApp.activate(ignoringOtherApps: true)
             popover.contentViewController?.view.window?.makeKey()
             store.beginActiveRefresh()
+            installOutsideClickMonitor()
+        }
+    }
+
+    private func installOutsideClickMonitor() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] _ in
+            self?.popover.performClose(nil)
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let m = outsideClickMonitor {
+            NSEvent.removeMonitor(m)
+            outsideClickMonitor = nil
         }
     }
 
     // Stop all refreshing + free caches whenever the popover closes (incl.
     // outside-click). Nothing runs while the popover is closed.
     func popoverDidClose(_ notification: Notification) {
+        removeOutsideClickMonitor()
         store.endActiveRefresh()
     }
 

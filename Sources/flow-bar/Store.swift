@@ -27,6 +27,11 @@ final class Store: ObservableObject {
         didSet { UserDefaults.standard.set(monochromeIcon, forKey: "monochromeIcon") }
     }
 
+    /// Preferred flow terminal backend (FLOW_TERM); "" = let flow auto-detect.
+    @Published var terminalBackend: String = UserDefaults.standard.string(forKey: "flowTerm") ?? "" {
+        didSet { UserDefaults.standard.set(terminalBackend, forKey: "flowTerm") }
+    }
+
     // FLOW_ROOT profiles (see Profiles.swift).
     @Published var profiles: [Profile] = []
     @Published var activeProfileID: String = ""
