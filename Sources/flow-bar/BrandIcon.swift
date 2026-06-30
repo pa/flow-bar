@@ -5,6 +5,7 @@ import AppKit
 /// in the hand-assembled .app bundle without a resource copy step. Rendered at
 /// @2x (height 36px); displayed ~16pt tall in the menubar, non-template so the
 /// gradient shows.
+@MainActor
 enum BrandIcon {
     /// Shared target height (pt) for the menubar — used by the "w" image, the
     /// loading spinner, and the result mark so they all read the same size.
