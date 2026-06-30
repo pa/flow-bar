@@ -48,7 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePopover)
-        statusItem.button?.imagePosition = .imageLeading
+        // Indicator (✓ / • / ⚠) sits before the "w" icon.
+        statusItem.button?.imagePosition = .imageTrailing
 
         if let button = statusItem.button {
             button.addSubview(spinner)
