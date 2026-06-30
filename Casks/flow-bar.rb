@@ -1,6 +1,6 @@
 cask "flow-bar" do
-  version "0.1.4"
-  sha256 "f8f02886074b606eaeb4716071d1151e7e51f902378a656f8f9258dc463ec566"
+  version "0.1.5"
+  sha256 "9d771ccb0b0154638e7614b34db16ddeec3f85384689eeef6cfc9b773e129a04"
 
   url "https://github.com/pa/flow-bar/releases/download/v#{version}/flow-bar.zip"
   name "flow-bar"
