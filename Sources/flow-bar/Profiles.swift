@@ -56,7 +56,8 @@ extension Store {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Use as Profile"
+        panel.title = "Add Flow Root"
+        panel.prompt = "Add Flow Root"
         panel.message = "Choose a flow root directory (contains flow.db)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
