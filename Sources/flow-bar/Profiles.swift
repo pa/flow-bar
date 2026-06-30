@@ -51,6 +51,9 @@ extension Store {
     /// Pick a folder (native panel), validate it looks like a flow root, then
     /// add + activate it.
     func addProfileViaPicker() {
+        // Close the popover first — leaving it open behind the modal folder
+        // picker leaves it as a translucent ghost.
+        Store.dismissPopover()
         NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
