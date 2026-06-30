@@ -3,7 +3,7 @@ import SwiftUI
 
 /// App sections, shown as the left icon rail.
 enum Section: String, CaseIterable, Identifiable {
-    case dashboard, tasks, inbox, playbooks, projects, owners, team
+    case dashboard, tasks, inbox, playbooks, projects, owners
     var id: String { rawValue }
 
     var title: String {
@@ -14,7 +14,6 @@ enum Section: String, CaseIterable, Identifiable {
         case .playbooks: return "Playbooks"
         case .projects: return "Projects"
         case .owners: return "Owners"
-        case .team: return "Team"
         }
     }
 
@@ -26,7 +25,6 @@ enum Section: String, CaseIterable, Identifiable {
         case .playbooks: return "play.rectangle"
         case .projects: return "folder"
         case .owners: return "gearshape.2"
-        case .team: return "person.2"
         }
     }
 
@@ -56,9 +54,15 @@ struct MenuContentView: View {
         }
         .frame(width: 440, height: 520)
         .onAppear {
+            section = .tasks         // always open on the in-progress list
+            query = ""
             store.refresh()          // in-progress list (default view)
             store.refreshMetrics()   // powers the rail inbox badge
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
+        }
+        .onDisappear {
+            section = .tasks         // reset so the next open starts here too
+            query = ""
         }
     }
 
@@ -118,7 +122,6 @@ struct MenuContentView: View {
         switch section {
         case .dashboard: DashboardView(store: store) { jump(to: $0) }
         case .tasks:     TasksView(store: store, query: query)
-        case .team:      TeamView(store: store)
         case .inbox:     InboxView(store: store)
         case .projects:  ProjectsView(store: store, query: query)
         case .playbooks: PlaybooksView(store: store, query: query)
@@ -199,14 +202,12 @@ struct MenuContentView: View {
         case .tasks:
             store.refresh()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
-        case .team: break
         }
     }
 
     private func refreshActive() {
         switch section {
         case .tasks: store.refresh()
-        case .team: store.refreshTeam()
         default: store.refreshMetrics()
         }
     }
@@ -214,7 +215,6 @@ struct MenuContentView: View {
     private var isActiveLoading: Bool {
         switch section {
         case .tasks: return store.isLoading
-        case .team: return store.teamLoading
         default: return store.metricsLoading
         }
     }
@@ -225,9 +225,6 @@ struct MenuContentView: View {
             let total = store.tasks.count
             let shown = store.tasks.filtered(by: query).count
             return (query.isEmpty || shown == total) ? "\(total)" : "\(shown) of \(total)"
-        case .team:
-            let n = store.teamMembers.reduce(0) { $0 + $1.tasks.count }
-            return store.teamMembers.isEmpty ? "" : "\(n)"
         case .inbox:
             guard let m = store.metrics else { return "" }
             let n = m.questionCount + m.overdueCount + m.waitingCount

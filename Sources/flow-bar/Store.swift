@@ -1,3 +1,4 @@
+import AppKit
 import FlowBarCore
 import Foundation
 
@@ -43,7 +44,7 @@ final class Store: ObservableObject {
 
     /// Refresh on a fixed cadence so the menubar stays current without the
     /// popover being open. Refreshes immediately, then every `interval`.
-    func startPolling(interval: TimeInterval = 60) {
+    func startPolling(interval: TimeInterval = 120) {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -191,44 +192,56 @@ final class Store: ObservableObject {
         }
     }
 
-    /// Aggregate dashboard metrics (all local CLI calls). On demand.
+    /// Aggregate dashboard metrics. Runs the independent flow reads
+    /// CONCURRENTLY (vs. ~8 sequential calls) so the dashboard loads fast.
     func refreshMetrics() {
         metricsLoading = true
         Task {
-            do {
-                let m = try await Task.detached(priority: .userInitiated) {
-                    try FlowClient().dashboardMetrics()
-                }.value
-                self.metrics = m
-                self.metricsError = nil
-                // Keep the in-progress list (and icon badge) in sync for free.
-                self.tasks = m.inProgress
-                self.lastUpdated = Date()
-            } catch {
-                self.metricsError = String(describing: error)
-            }
+            let c = FlowClient()
+            async let ip       = Task.detached { (try? c.inProgressTasks()) ?? [] }.value
+            async let backlog  = Task.detached { (try? c.listTasks(status: "backlog").count) ?? 0 }.value
+            async let done     = Task.detached { (try? c.listTasks(status: "done").count) ?? 0 }.value
+            async let projects = Task.detached { (try? c.listProjects()) ?? [] }.value
+            async let runs     = Task.detached { (try? c.listRuns()) ?? [] }.value
+            async let owners   = Task.detached { (try? c.listOwners()) ?? [] }.value
+            async let tags     = Task.detached { (try? c.listTags()) ?? [] }.value
+            async let questions = Task.detached { (try? c.listTasks(tag: "question")) ?? [] }.value
+
+            let m = DashboardMetrics(
+                inProgress: await ip, backlogCount: await backlog, doneCount: await done,
+                projects: await projects, runs: await runs, owners: await owners,
+                tags: await tags, questions: await questions)
+            self.metrics = m
+            self.metricsError = nil
+            // Keep the in-progress list (and search) in sync for free.
+            self.tasks = m.inProgress
+            self.lastUpdated = Date()
             self.metricsLoading = false
         }
     }
 
     /// Switch to a task — `flow do <slug>` focuses its live tab or spawns a
-    /// new one. (Phase 3 will add search + richer guard/Accessibility
-    /// surfacing; Phase 2 wires the basic action + error reporting.)
+    /// new one. We dismiss the popover IMMEDIATELY (so the click feels
+    /// instant) and run `flow do` fire-and-forget in the background; no
+    /// post-switch refresh (the next poll/open picks up any change).
     func switchTo(_ slug: String) {
+        Self.dismissPopover()
         Task {
             do {
                 let res = try await Task.detached(priority: .userInitiated) {
                     try FlowClient().doTask(slug)
                 }.value
-                if res.code != 0 {
-                    self.errorText = "switch to \(slug) failed: \(res.stderr)"
-                } else {
-                    self.errorText = nil
-                }
+                // Surface a failure on the next open; don't block the switch.
+                self.errorText = res.code != 0 ? "switch to \(slug) failed: \(res.stderr)" : nil
             } catch {
                 self.errorText = String(describing: error)
             }
-            self.refresh()
         }
+    }
+
+    /// Close the MenuBarExtra popover so an action feels instant.
+    /// (The .window-style popover is the key window when a row is clicked.)
+    static func dismissPopover() {
+        NSApp.keyWindow?.close()
     }
 }
