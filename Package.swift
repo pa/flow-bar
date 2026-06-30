@@ -24,5 +24,12 @@ let package = Package(
             name: "flow-bar",
             dependencies: ["FlowBarCore"]
         ),
+        // Unit tests for the pure data/logic layer. A plain executable harness
+        // (not XCTest) so it runs with Command Line Tools — no Xcode needed.
+        // Run with: swift run flowbar-tests
+        .executableTarget(
+            name: "flowbar-tests",
+            dependencies: ["FlowBarCore"]
+        ),
     ]
 )

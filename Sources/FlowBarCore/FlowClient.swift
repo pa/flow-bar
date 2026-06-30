@@ -151,7 +151,11 @@ public struct FlowClient: Sendable {
             throw FlowClientError.commandFailed(
                 command: "flow owner list", code: code, stderr: stderr)
         }
-        let text = String(data: data, encoding: .utf8) ?? ""
+        return Self.parseOwners(String(data: data, encoding: .utf8) ?? "")
+    }
+
+    /// Parse `flow owner list` text (pure — unit-testable).
+    public static func parseOwners(_ text: String) -> [Owner] {
         var owners: [Owner] = []
         for raw in text.split(separator: "\n") {
             let line = String(raw)
@@ -179,7 +183,11 @@ public struct FlowClient: Sendable {
             throw FlowClientError.commandFailed(
                 command: "flow list tags", code: code, stderr: stderr)
         }
-        let text = String(data: data, encoding: .utf8) ?? ""
+        return Self.parseTags(String(data: data, encoding: .utf8) ?? "")
+    }
+
+    /// Parse `flow list tags` text (pure — unit-testable).
+    public static func parseTags(_ text: String) -> [TagCount] {
         var tags: [TagCount] = []
         for raw in text.split(separator: "\n") {
             let fields = String(raw).split(whereSeparator: { $0 == " " || $0 == "\t" })

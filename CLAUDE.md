@@ -12,10 +12,17 @@ Xcode** (`xcodebuild` is unavailable). Everything is driven by SwiftPM.
 
 ```sh
 swift build                 # debug build of all targets
+swift run flowbar-tests     # unit tests (exits non-zero on failure)
 swift run flowbar-smoke     # prints decoded in-progress tasks (data-path check)
 ./build-app.sh              # assemble flow-bar.app (release + ad-hoc sign)
 ./build-app.sh --run        # ...and launch it
 ```
+
+**Tests:** `XCTest`/`swift-testing` aren't available with Command Line Tools
+(they need full Xcode), so unit tests are a plain executable harness
+(`Sources/flowbar-tests`, see `T` in `Harness.swift`) covering the pure
+`FlowBarCore` logic: model decoding, `filtered`/`sorted` helpers, the
+owners/tags text parsers, and `DashboardMetrics`. Run `swift run flowbar-tests`.
 
 `build-app.sh` produces `flow-bar.app` (gitignored). To relaunch after a
 rebuild, kill the old instance first:

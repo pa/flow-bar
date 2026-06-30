@@ -19,6 +19,13 @@ public struct Project: Codable, Identifiable, Hashable, Sendable {
         case inProgress = "in_progress"
         case backlog, done, updated
     }
+
+    public init(slug: String, name: String, priority: String, status: String,
+                total: Int, inProgress: Int, backlog: Int, done: Int, updated: String?) {
+        self.slug = slug; self.name = name; self.priority = priority; self.status = status
+        self.total = total; self.inProgress = inProgress; self.backlog = backlog
+        self.done = done; self.updated = updated
+    }
 }
 
 /// A playbook definition from `flow list playbooks --format json`.
@@ -35,6 +42,9 @@ public struct PlaybookRun: Codable, Identifiable, Hashable, Sendable {
     public var status: String
     public var playbook: String?
     public var id: String { slug }
+    public init(slug: String, status: String, playbook: String?) {
+        self.slug = slug; self.status = status; self.playbook = playbook
+    }
 }
 
 /// An owner from `flow owner list` (text output — no JSON mode).
