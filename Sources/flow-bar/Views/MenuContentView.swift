@@ -120,7 +120,8 @@ struct MenuContentView: View {
         case .tasks:     TasksView(store: store, query: query)
         case .team:      TeamView(store: store)
         case .inbox:     InboxView(store: store)
-        case .playbooks, .projects, .owners:
+        case .projects:  ProjectsView(store: store, query: query)
+        case .playbooks, .owners:
             comingSoon(section.title)
         }
     }

@@ -108,10 +108,12 @@ public struct FlowClient: Sendable {
     }
 
     /// Decode `flow list tasks ... --format json` into `[FlowTask]`.
-    public func listTasks(status: String? = nil, tag: String? = nil) throws -> [FlowTask] {
+    public func listTasks(status: String? = nil, tag: String? = nil,
+                          project: String? = nil) throws -> [FlowTask] {
         var args = ["list", "tasks"]
         if let status { args += ["--status", status] }
         if let tag { args += ["--tag", tag] }
+        if let project { args += ["--project", project] }
         args += ["--format", "json"]
         return try decodeJSON([FlowTask].self, args)
     }

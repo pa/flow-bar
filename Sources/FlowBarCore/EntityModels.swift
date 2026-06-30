@@ -120,4 +120,19 @@ public extension Array where Element == FlowTask {
             return a.slug < b.slug
         }
     }
+
+    /// Status order (in-progress, backlog, done), then priority, then slug.
+    func sortedByStatusThenPriority() -> [FlowTask] {
+        func statusRank(_ s: String) -> Int {
+            switch s { case "in-progress": return 0; case "backlog": return 1; default: return 2 }
+        }
+        func prioRank(_ p: FlowTask.Priority) -> Int {
+            switch p { case .high: return 0; case .medium: return 1; case .low: return 2 }
+        }
+        return sorted { a, b in
+            if a.status != b.status { return statusRank(a.status) < statusRank(b.status) }
+            if a.priority != b.priority { return prioRank(a.priorityValue) < prioRank(b.priorityValue) }
+            return a.slug < b.slug
+        }
+    }
 }

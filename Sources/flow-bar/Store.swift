@@ -84,6 +84,23 @@ final class Store: ObservableObject {
         }
     }
 
+    // Tasks under a drilled-into project.
+    @Published var projectTasks: [FlowTask] = []
+    @Published var projectTasksLoading = false
+
+    /// Load all tasks under a project (any status) for the Projects drill-in.
+    func loadProjectTasks(_ slug: String) {
+        projectTasksLoading = true
+        projectTasks = []
+        Task {
+            let result = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listTasks(project: slug)
+            }.value) ?? []
+            self.projectTasks = result
+            self.projectTasksLoading = false
+        }
+    }
+
     /// Aggregate dashboard metrics (all local CLI calls). On demand.
     func refreshMetrics() {
         metricsLoading = true
