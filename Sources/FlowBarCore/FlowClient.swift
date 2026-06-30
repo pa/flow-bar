@@ -23,6 +23,10 @@ public enum FlowClientError: Error, CustomStringConvertible {
 /// We treat the CLI as the API: reads via `--format json`, mutations/actions
 /// via real subcommands (`flow do`). We never touch flow.db directly, so we
 /// don't couple to its schema and we respect flow's invariants.
+/// UserDefaults key the app writes the active profile's flow root to, and the
+/// client reads on every invocation. Shared so detached calls stay correct.
+public let activeFlowRootKey = "activeFlowRoot"
+
 public struct FlowClient: Sendable {
     /// A generous PATH so GUI launches (which inherit a minimal environment)
     /// can still find flow, flow-workspace, claude, git, etc.
@@ -69,6 +73,11 @@ public struct FlowClient: Sendable {
 
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = searchPATH
+        // Active profile's flow root (set by the app); falls back to flow's
+        // own default (~/.flow) when unset.
+        if let root = UserDefaults.standard.string(forKey: activeFlowRootKey), !root.isEmpty {
+            env["FLOW_ROOT"] = (root as NSString).expandingTildeInPath
+        }
         process.environment = env
 
         let outPipe = Pipe()

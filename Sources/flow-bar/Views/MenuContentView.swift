@@ -173,17 +173,42 @@ struct MenuContentView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            if let updated = store.lastUpdated {
-                Text("Updated \(updated.formatted(date: .omitted, time: .standard))")
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
-            }
-            Spacer()
             Menu {
+                ForEach(store.profiles) { p in
+                    Button {
+                        store.setActiveProfile(p.id)
+                    } label: {
+                        if p.id == store.activeProfileID {
+                            Label(p.name, systemImage: "checkmark")
+                        } else {
+                            Text(p.name)
+                        }
+                    }
+                }
+                Divider()
+                Button("Add Profile…") { store.addProfileViaPicker() }
+                if store.activeProfileID != Profile.defaultID {
+                    Button("Remove “\(store.activeProfile.name)”", role: .destructive) {
+                        store.removeActiveProfile()
+                    }
+                }
+                Divider()
                 Toggle("Monochrome icon", isOn: $store.monochromeIcon)
             } label: {
-                Image(systemName: "gearshape").font(.system(size: 12))
+                HStack(spacing: 4) {
+                    Image(systemName: "person.crop.circle").font(.system(size: 11))
+                    Text(store.activeProfile.name).font(.system(size: 11))
+                }
             }
-            .menuStyle(.borderlessButton).fixedSize().help("Settings")
+            .menuStyle(.borderlessButton).fixedSize()
+            .help("Switch flow profile")
+
+            Spacer()
+
+            if let updated = store.lastUpdated {
+                Text(updated.formatted(date: .omitted, time: .standard))
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
         }

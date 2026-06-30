@@ -27,7 +27,23 @@ final class Store: ObservableObject {
         didSet { UserDefaults.standard.set(monochromeIcon, forKey: "monochromeIcon") }
     }
 
+    // FLOW_ROOT profiles (see Profiles.swift).
+    @Published var profiles: [Profile] = []
+    @Published var activeProfileID: String = ""
+
+    /// In-flight fire-and-forget operations (switch / run / tick) that have no
+    /// dedicated loading flag. Combined with the per-section loading flags into
+    /// `isBusy`, which drives the menubar spinner.
+    @Published var busyOps = 0
+
+    /// True whenever any background flow command is running.
+    var isBusy: Bool {
+        isLoading || metricsLoading || browseLoading || projectTasksLoading
+            || ownerTasksLoading || playbooksLoading || busyOps > 0
+    }
+
     init() {
+        loadProfiles()
         startPolling()
     }
 
@@ -116,20 +132,24 @@ final class Store: ObservableObject {
 
     /// Run a playbook. `auto` runs headlessly; else spawns a tab.
     func runPlaybook(_ slug: String, auto: Bool = false) {
+        busyOps += 1
         Task {
             _ = try? await Task.detached(priority: .userInitiated) {
                 try FlowClient().runPlaybook(slug, auto: auto)
             }.value
+            self.busyOps -= 1
             self.refreshPlaybooks()
         }
     }
 
     /// Tick an owner now. `auto` ticks headlessly; else spawns a tab.
     func ownerTick(_ slug: String, auto: Bool = false) {
+        busyOps += 1
         Task {
             _ = try? await Task.detached(priority: .userInitiated) {
                 try FlowClient().ownerTick(slug, auto: auto)
             }.value
+            self.busyOps -= 1
         }
     }
 
@@ -148,10 +168,12 @@ final class Store: ObservableObject {
 
     /// Pause/resume an owner (safe), then refresh metrics so status updates.
     func setOwnerPaused(_ slug: String, paused: Bool) {
+        busyOps += 1
         Task {
             _ = try? await Task.detached(priority: .userInitiated) {
                 try FlowClient().setOwner(slug, paused: paused)
             }.value
+            self.busyOps -= 1
             self.refreshMetrics()
         }
     }
@@ -203,6 +225,7 @@ final class Store: ObservableObject {
     /// post-switch refresh (the next poll/open picks up any change).
     func switchTo(_ slug: String) {
         Self.dismissPopover()
+        busyOps += 1
         Task {
             do {
                 let res = try await Task.detached(priority: .userInitiated) {
@@ -213,6 +236,7 @@ final class Store: ObservableObject {
             } catch {
                 self.errorText = String(describing: error)
             }
+            self.busyOps -= 1
         }
     }
 
