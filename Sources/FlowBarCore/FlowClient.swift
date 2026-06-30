@@ -18,7 +18,7 @@ public enum FlowClientError: Error, CustomStringConvertible {
     }
 }
 
-/// Thin bridge over the `flow` / `flow-workspace` CLIs.
+/// Thin bridge over the `flow` CLI.
 ///
 /// We treat the CLI as the API: reads via `--format json`, mutations/actions
 /// via real subcommands (`flow do`). We never touch flow.db directly, so we
@@ -29,7 +29,7 @@ public let activeFlowRootKey = "activeFlowRoot"
 
 public struct FlowClient: Sendable {
     /// A generous PATH so GUI launches (which inherit a minimal environment)
-    /// can still find flow, flow-workspace, claude, git, etc.
+    /// can still find flow, claude, git, etc.
     static let searchPATH: String = {
         let home = NSHomeDirectory()
         let dirs = [
