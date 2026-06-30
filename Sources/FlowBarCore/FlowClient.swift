@@ -113,6 +113,75 @@ public struct FlowClient: Sendable {
         try listTasks(status: "in-progress")
     }
 
+    /// Parse `flow-workspace activity` text into members + their tasks.
+    ///
+    /// Format (no JSON mode exists):
+    ///   Member Name
+    ///     <slug>  <status>  [<project>]
+    ///     ...
+    ///   <blank line between members>
+    ///
+    /// Throws if the workspace is unreachable so the UI can degrade gracefully.
+    public func teamActivity(includeAll: Bool = false) throws -> [TeamMember] {
+        var args = ["activity"]
+        if includeAll { args.append("--all") }
+
+        let (data, stderr, code) = try Self.run("flow-workspace", args)
+        let text = String(data: data, encoding: .utf8) ?? ""
+        // The CLI sometimes prints "Error: ..." to stdout with rc 0 on a
+        // network failure — treat either signal as unreachable.
+        if code != 0 || text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Error") {
+            let msg = code != 0 ? stderr : text
+            throw FlowClientError.commandFailed(
+                command: "flow-workspace " + args.joined(separator: " "),
+                code: code, stderr: msg)
+        }
+        return Self.parseActivity(text)
+    }
+
+    static func parseActivity(_ text: String) -> [TeamMember] {
+        var members: [TeamMember] = []
+        var currentName: String?
+        var currentTasks: [TeamActivityTask] = []
+
+        func flush() {
+            if let name = currentName {
+                members.append(TeamMember(name: name, tasks: currentTasks))
+            }
+            currentName = nil
+            currentTasks = []
+        }
+
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+
+            let isIndented = line.first == " " || line.first == "\t"
+            if !isIndented {
+                // New member header.
+                flush()
+                currentName = line.trimmingCharacters(in: .whitespaces)
+            } else {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                var project: String?
+                var rest = trimmed
+                if let open = trimmed.lastIndex(of: "["),
+                   let close = trimmed.lastIndex(of: "]"), open < close {
+                    project = String(trimmed[trimmed.index(after: open)..<close])
+                    rest = String(trimmed[..<open]).trimmingCharacters(in: .whitespaces)
+                }
+                let fields = rest.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                    .map(String.init).filter { !$0.isEmpty }
+                guard let slug = fields.first else { continue }
+                let status = fields.count > 1 ? fields[1] : ""
+                currentTasks.append(
+                    TeamActivityTask(slug: slug, status: status, project: project))
+            }
+        }
+        flush()
+        return members
+    }
+
     // MARK: Actions
 
     /// Switch to a task: focuses its live tab or spawns a new one.

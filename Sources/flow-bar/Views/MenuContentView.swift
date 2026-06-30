@@ -3,29 +3,26 @@ import SwiftUI
 
 /// The popover shown when the menubar icon is clicked:
 /// header + search field + filtered in-progress list + error banner + footer.
+enum Tab: String, CaseIterable { case tasks = "Tasks", team = "Team" }
+
 struct MenuContentView: View {
     @ObservedObject var store: Store
 
     @State private var query: String = ""
+    @State private var tab: Tab = .tasks
     @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            searchBar
+            tabPicker
             Divider()
 
-            if let error = store.errorText {
-                errorBanner(error)
-                Divider()
-            }
-
-            if store.tasks.isEmpty {
-                centeredMessage("No in-progress tasks")
-            } else if filteredTasks.isEmpty {
-                centeredMessage("No matches for “\(query)”")
-            } else {
-                taskList
+            switch tab {
+            case .tasks:
+                tasksPane
+            case .team:
+                TeamView(store: store)
             }
 
             Divider()
@@ -34,10 +31,43 @@ struct MenuContentView: View {
         .frame(width: 380, height: 480)
         .onAppear {
             store.refresh()
-            // Focus the search field when the popover opens.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                searchFocused = true
-            }
+            focusSearchSoon()
+        }
+    }
+
+    @ViewBuilder
+    private var tasksPane: some View {
+        searchBar
+        Divider()
+        if let error = store.errorText {
+            errorBanner(error)
+            Divider()
+        }
+        if store.tasks.isEmpty {
+            centeredMessage("No in-progress tasks")
+        } else if filteredTasks.isEmpty {
+            centeredMessage("No matches for “\(query)”")
+        } else {
+            taskList
+        }
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $tab) {
+            ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 10)
+        .padding(.bottom, 6)
+        .onChange(of: tab) { newValue in
+            if newValue == .tasks { focusSearchSoon() }
+        }
+    }
+
+    private func focusSearchSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            if tab == .tasks { searchFocused = true }
         }
     }
 
@@ -53,10 +83,10 @@ struct MenuContentView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
-            if store.isLoading {
+            if (tab == .tasks && store.isLoading) || (tab == .team && store.teamLoading) {
                 ProgressView().controlSize(.small)
             }
-            Button(action: store.refresh) {
+            Button(action: refreshActive) {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.plain)
@@ -147,7 +177,15 @@ struct MenuContentView: View {
 
     // MARK: Derived data
 
+    private func refreshActive() {
+        if tab == .tasks { store.refresh() } else { store.refreshTeam() }
+    }
+
     private var countLabel: String {
+        if tab == .team {
+            let n = store.teamMembers.reduce(0) { $0 + $1.tasks.count }
+            return store.teamMembers.isEmpty ? "Team" : "Team · \(n)"
+        }
         let total = store.tasks.count
         let shown = filteredTasks.count
         if query.isEmpty || shown == total { return "In progress · \(total)" }

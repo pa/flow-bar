@@ -75,3 +75,24 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
         self.dueLabel = dueLabel
     }
 }
+
+/// A teammate's in-progress work, from `flow-workspace activity` (text output;
+/// the command has no JSON mode).
+public struct TeamMember: Identifiable, Hashable, Sendable {
+    public var name: String
+    public var tasks: [TeamActivityTask]
+    public var id: String { name }
+    public init(name: String, tasks: [TeamActivityTask]) {
+        self.name = name; self.tasks = tasks
+    }
+}
+
+public struct TeamActivityTask: Identifiable, Hashable, Sendable {
+    public var slug: String
+    public var status: String
+    public var project: String?
+    public var id: String { slug }
+    public init(slug: String, status: String, project: String?) {
+        self.slug = slug; self.status = status; self.project = project
+    }
+}
