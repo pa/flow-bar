@@ -277,4 +277,19 @@ public struct FlowClient: Sendable {
         let (_, stderr, code) = try Self.run("flow", ["do", slug])
         return (stderr, code)
     }
+
+    /// Run a playbook (spawns a new tab; manual/explicit only).
+    @discardableResult
+    public func runPlaybook(_ slug: String) throws -> (stderr: String, code: Int32) {
+        let (_, stderr, code) = try Self.run("flow", ["run", "playbook", slug])
+        return (stderr, code)
+    }
+
+    /// Pause or resume an owner — safe, no-spawn mutations.
+    @discardableResult
+    public func setOwner(_ slug: String, paused: Bool) throws -> (stderr: String, code: Int32) {
+        let verb = paused ? "pause" : "start"
+        let (_, stderr, code) = try Self.run("flow", ["owner", verb, slug])
+        return (stderr, code)
+    }
 }

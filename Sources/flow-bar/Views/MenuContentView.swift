@@ -121,8 +121,8 @@ struct MenuContentView: View {
         case .team:      TeamView(store: store)
         case .inbox:     InboxView(store: store)
         case .projects:  ProjectsView(store: store, query: query)
-        case .playbooks, .owners:
-            comingSoon(section.title)
+        case .playbooks: PlaybooksView(store: store, query: query)
+        case .owners:    OwnersView(store: store, query: query)
         }
     }
 
@@ -130,14 +130,6 @@ struct MenuContentView: View {
     private func railBadge(_ s: Section) -> Int? {
         guard s == .inbox, let m = store.metrics else { return nil }
         return m.questionCount + m.overdueCount
-    }
-
-    private func comingSoon(_ title: String) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: "hammer").font(.system(size: 20)).foregroundStyle(.tertiary)
-            Text("\(title) — coming next").font(.system(size: 12)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Header / search / footer

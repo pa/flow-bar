@@ -88,6 +88,64 @@ final class Store: ObservableObject {
     @Published var projectTasks: [FlowTask] = []
     @Published var projectTasksLoading = false
 
+    // Playbooks + runs (Playbooks section).
+    @Published var playbooks: [Playbook] = []
+    @Published var runs: [PlaybookRun] = []
+    @Published var playbooksLoading = false
+
+    // Tasks managed by a drilled-into owner.
+    @Published var ownerTasks: [FlowTask] = []
+    @Published var ownerTasksLoading = false
+
+    /// Load playbook definitions + runs for the Playbooks section.
+    func refreshPlaybooks() {
+        playbooksLoading = true
+        Task {
+            let pbs = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listPlaybooks()
+            }.value) ?? []
+            let rns = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listRuns()
+            }.value) ?? []
+            self.playbooks = pbs
+            self.runs = rns
+            self.playbooksLoading = false
+        }
+    }
+
+    /// Run a playbook (spawns a tab). Manual/explicit only.
+    func runPlaybook(_ slug: String) {
+        Task {
+            _ = try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().runPlaybook(slug)
+            }.value
+            self.refreshPlaybooks()
+        }
+    }
+
+    /// Load all tasks tagged `owner:<slug>` for the owner drill-in.
+    func loadOwnerTasks(_ slug: String) {
+        ownerTasksLoading = true
+        ownerTasks = []
+        Task {
+            let result = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listTasks(tag: "owner:\(slug)")
+            }.value) ?? []
+            self.ownerTasks = result
+            self.ownerTasksLoading = false
+        }
+    }
+
+    /// Pause/resume an owner (safe), then refresh metrics so status updates.
+    func setOwnerPaused(_ slug: String, paused: Bool) {
+        Task {
+            _ = try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().setOwner(slug, paused: paused)
+            }.value
+            self.refreshMetrics()
+        }
+    }
+
     /// Load all tasks under a project (any status) for the Projects drill-in.
     func loadProjectTasks(_ slug: String) {
         projectTasksLoading = true
