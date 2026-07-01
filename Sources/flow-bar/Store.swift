@@ -19,6 +19,11 @@ final class Store: ObservableObject {
     @Published var metricsError: String?
     @Published var metricsLoading = false
 
+    // flow's own "AI memory" stats (`flow stats`), shown atop the Overview.
+    // Kept separate from DashboardMetrics (which is exact-only; these include
+    // flow's token/time estimates).
+    @Published var stats: FlowStats?
+
     private let client = FlowClient()
     private var activeRefreshTask: Task<Void, Never>?
 
@@ -35,6 +40,12 @@ final class Store: ObservableObject {
     // FLOW_ROOT profiles (see Profiles.swift).
     @Published var profiles: [Profile] = []
     @Published var activeProfileID: String = ""
+
+    // Brief peek: which task's brief+updates is open (nil = list view), plus
+    // the loaded detail and its loading flag. Reads markdown files, no flow.db.
+    @Published var peekedSlug: String?
+    @Published var taskDetail: TaskDetail?
+    @Published var taskDetailLoading = false
 
     /// In-flight operations that actually open a terminal (flow do / flow run
     /// playbook / owner tick — NOT the routine data refreshes). Drives the
@@ -98,11 +109,36 @@ final class Store: ObservableObject {
         activeRefreshTask = nil
         tasks = []
         metrics = nil
+        stats = nil
+        closePeek()
         projectTasks = []
         ownerTasks = []
         browseTasks = []
         playbooks = []
         runs = []
+    }
+
+    /// Open the brief peek for a task and load its brief + recent updates.
+    func peekBrief(_ slug: String) {
+        peekedSlug = slug
+        taskDetail = nil
+        taskDetailLoading = true
+        Task {
+            let d = try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().taskDetail(slug)
+            }.value
+            // Ignore if the user closed the peek or opened a different one.
+            guard self.peekedSlug == slug else { return }
+            self.taskDetail = d
+            self.taskDetailLoading = false
+        }
+    }
+
+    /// Close the brief peek and return to the list.
+    func closePeek() {
+        peekedSlug = nil
+        taskDetail = nil
+        taskDetailLoading = false
     }
 
     /// Reload the in-progress task list.
@@ -150,6 +186,20 @@ final class Store: ObservableObject {
                 try FlowClient().listTasks(status: status)
             }.value) ?? []
             self.browseTasks = r
+            self.browseLoading = false
+        }
+    }
+
+    /// Load only archived tasks (hidden from the normal lists). Uses
+    /// `--include-archived` and keeps the ones flagged archived.
+    func loadArchived() {
+        browseLoading = true
+        browseTasks = []
+        Task {
+            let r = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listTasks(includeArchived: true)
+            }.value) ?? []
+            self.browseTasks = r.filter { $0.isArchived }
             self.browseLoading = false
         }
     }
@@ -250,12 +300,14 @@ final class Store: ObservableObject {
             async let owners   = Task.detached { (try? c.listOwners()) ?? [] }.value
             async let tags     = Task.detached { (try? c.listTags()) ?? [] }.value
             async let questions = Task.detached { (try? c.listTasks(tag: "question")) ?? [] }.value
+            async let stats    = Task.detached { try? c.flowStats() }.value
 
             let m = DashboardMetrics(
                 inProgress: await ip, backlogCount: await backlog, doneCount: await done,
                 projects: await projects, runs: await runs, owners: await owners,
                 tags: await tags, questions: await questions)
             self.metrics = m
+            self.stats = await stats
             self.metricsError = nil
             // Keep the in-progress list (and search) in sync for free.
             self.tasks = m.inProgress

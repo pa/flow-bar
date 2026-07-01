@@ -38,7 +38,7 @@ struct ProjectsView: View {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if projects.isEmpty {
                 Text(query.isEmpty ? "No projects" : "No matches")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .font(.system(size: 14)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -61,21 +61,21 @@ struct ProjectsView: View {
         HStack(spacing: 8) {
             Circle().fill(priorityColor(p.priority)).frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
-                Text(p.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text(p.slug).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Text(p.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                Text(p.slug).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
             countChip("\(p.inProgress)", .blue, "in progress")
             countChip("\(p.backlog)", .gray, "backlog")
             countChip("\(p.done)", .green, "done")
-            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 4).padding(.horizontal, 8)
     }
 
     private func countChip(_ n: String, _ color: Color, _ help: String) -> some View {
-        Text(n).font(.system(size: 11, weight: .medium)).foregroundStyle(color)
+        Text(n).font(.system(size: 13, weight: .medium)).foregroundStyle(color)
             .frame(minWidth: 18)
             .help(help)
     }
@@ -86,9 +86,9 @@ struct ProjectsView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button { selected = nil } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "chevron.left").font(.system(size: 11))
-                    Text(p.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text("· \(p.total)").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.left").font(.system(size: 13))
+                    Text(p.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                    Text("· \(p.total)").font(.system(size: 13)).foregroundStyle(.secondary)
                     Spacer()
                 }
             }
@@ -102,13 +102,13 @@ struct ProjectsView: View {
                 let tasks = store.projectTasks.filtered(by: query).sortedByStatusThenPriority()
                 if tasks.isEmpty {
                     Text(query.isEmpty ? "No tasks" : "No matches")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) {
                             ForEach(tasks) { t in
-                                TaskRow(task: t) { store.switchTo(t.slug) }
+                                TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, showStatus: true)
                             }
                         }
                         .padding(.vertical, 4)

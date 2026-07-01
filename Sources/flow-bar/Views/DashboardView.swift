@@ -19,7 +19,7 @@ struct DashboardView: View {
                 content(m)
             } else if let err = store.metricsError {
                 Text(err)
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Color.clear
@@ -31,6 +31,11 @@ struct DashboardView: View {
     private func content(_ m: DashboardMetrics) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                if let s = store.stats, !s.isEmpty {
+                    groupLabel("Your AI memory")
+                    memoryCard(s)
+                }
+
                 groupLabel("Work")
                 LazyVGrid(columns: columns, spacing: 8) {
                     tile("\(m.inProgressCount)", "in progress", .blue) { onNavigate(.tasks(.inProgress)) }
@@ -59,7 +64,7 @@ struct DashboardView: View {
                     groupLabel("Top tags")
                     FlowWrap(m.topTags) { t in
                         Text("#\(t.tag) \(t.count)")
-                            .font(.system(size: 11))
+                            .font(.system(size: 13))
                             .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(Theme.chip)
                             .clipShape(Capsule())
@@ -70,9 +75,68 @@ struct DashboardView: View {
         }
     }
 
+    /// flow's "your AI remembered, so you didn't" numbers, as a feature card.
+    /// Read-only (nothing to navigate to) — a delight/reassurance surface.
+    private func memoryCard(_ s: FlowStats) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Headline: context recalls.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(s.contextRecalls ?? 0)")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                Text("context recalls")
+                    .font(.system(size: 15, weight: .medium))
+                Spacer()
+                if let w = s.weeklyRecalls {
+                    Text(w)
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.accent)
+                        .help("Weekly recalls")
+                }
+            }
+            Text("flow remembered, so you didn't re-explain it.")
+                .font(.system(size: 13)).foregroundStyle(.secondary)
+
+            Divider().opacity(0.4)
+
+            // Supporting stats.
+            FlowWrap(memoryStats(s)) { stat in
+                HStack(spacing: 4) {
+                    Text(stat.value).font(.system(size: 14, weight: .semibold))
+                    Text(stat.label).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.tile)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// The secondary memory figures, only those present, as label/value chips.
+    private func memoryStats(_ s: FlowStats) -> [LabeledStat] {
+        var out: [LabeledStat] = []
+        if let t = s.tokensReEstablished, t > 0 { out.append(.init(value: "~\(Self.abbrev(t))", label: "tokens saved")) }
+        if let r = s.instantResumes, r > 0 { out.append(.init(value: "\(r)", label: "instant resumes")) }
+        if let d = s.tasksDone, d > 0 { out.append(.init(value: "\(d)", label: "done")) }
+        if let k = s.kbFacts, k > 0 { out.append(.init(value: "\(k)", label: "KB facts")) }
+        return out
+    }
+
+    /// Abbreviate large counts: 701842 -> "702k", 5011319778 -> "5.0B".
+    static func abbrev(_ n: Int) -> String {
+        let d = Double(n)
+        switch n {
+        case 1_000_000_000...: return String(format: "%.1fB", d / 1e9)
+        case 1_000_000...:     return String(format: "%.1fM", d / 1e6)
+        case 1_000...:         return String(format: "%.0fk", d / 1e3)
+        default:               return "\(n)"
+        }
+    }
+
     private func groupLabel(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 10, weight: .bold))
+            .font(.system(size: 12, weight: .bold))
             .foregroundStyle(.tertiary)
     }
 
@@ -80,8 +144,8 @@ struct DashboardView: View {
                       action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                Text(value).font(.system(size: 23, weight: .semibold)).foregroundStyle(color)
-                Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(value).font(.system(size: 27, weight: .semibold)).foregroundStyle(color)
+                Text(label).font(.system(size: 13)).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
@@ -91,6 +155,13 @@ struct DashboardView: View {
         }
         .buttonStyle(.plain)
     }
+}
+
+/// A label/value pair for the memory card's supporting stats.
+struct LabeledStat: Identifiable {
+    let value: String
+    let label: String
+    var id: String { label }
 }
 
 /// Minimal wrapping layout for tag chips (macOS 13 compatible).

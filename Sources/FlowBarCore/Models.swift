@@ -25,6 +25,7 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
     public var due: String?
     public var dueInDays: Int?
     public var dueLabel: String?
+    public var archived: Bool?
 
     public var id: String { slug }
 
@@ -37,6 +38,7 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
         case live, updated, tags, assignee, due
         case dueInDays = "due_in_days"
         case dueLabel = "due_label"
+        case archived
     }
 
     /// Tolerant decoder: only `slug` is required. Everything else defaults, so
@@ -60,12 +62,14 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
         due = try? c.decode(String.self, forKey: .due)
         dueInDays = try? c.decode(Int.self, forKey: .dueInDays)
         dueLabel = try? c.decode(String.self, forKey: .dueLabel)
+        archived = try? c.decode(Bool.self, forKey: .archived)
     }
 
     // MARK: Convenience accessors (nil-safe for the UI layer)
 
     public var isStale: Bool { stale ?? false }
     public var isLive: Bool { live ?? false }
+    public var isArchived: Bool { archived ?? false }
     public var isWaiting: Bool { (waitingOn?.isEmpty == false) }
     public var tagList: [String] { tags ?? [] }
     public var projectName: String? {
@@ -88,13 +92,14 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
         project: String? = nil, ageDays: Int? = nil, stale: Bool? = nil,
         staleDays: Int? = nil, waitingOn: String? = nil, live: Bool? = nil,
         updated: String? = nil, tags: [String]? = nil, assignee: String? = nil,
-        due: String? = nil, dueInDays: Int? = nil, dueLabel: String? = nil
+        due: String? = nil, dueInDays: Int? = nil, dueLabel: String? = nil,
+        archived: Bool? = nil
     ) {
         self.slug = slug; self.name = name; self.status = status
         self.priority = priority; self.project = project; self.ageDays = ageDays
         self.stale = stale; self.staleDays = staleDays; self.waitingOn = waitingOn
         self.live = live; self.updated = updated; self.tags = tags
         self.assignee = assignee; self.due = due; self.dueInDays = dueInDays
-        self.dueLabel = dueLabel
+        self.dueLabel = dueLabel; self.archived = archived
     }
 }

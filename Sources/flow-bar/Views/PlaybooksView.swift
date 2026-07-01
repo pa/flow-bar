@@ -35,7 +35,7 @@ struct PlaybooksView: View {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if playbooks.isEmpty {
                 Text(query.isEmpty ? "No playbooks" : "No matches")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .font(.system(size: 14)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -55,19 +55,19 @@ struct PlaybooksView: View {
         let rs = runs(for: p.slug)
         let live = rs.filter { $0.status == "in-progress" }.count
         return HStack(spacing: 8) {
-            Image(systemName: "play.rectangle").font(.system(size: 12)).foregroundStyle(.secondary)
+            Image(systemName: "play.rectangle").font(.system(size: 14)).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(p.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(p.slug).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                 if let proj = p.project {
-                    Text(proj).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(proj).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 4)
             if live > 0 {
-                Text("\(live) live").font(.system(size: 10, weight: .medium)).foregroundStyle(.green)
+                Text("\(live) live").font(.system(size: 12, weight: .medium)).foregroundStyle(.green)
             }
-            Text("\(rs.count) runs").font(.system(size: 11)).foregroundStyle(.tertiary)
-            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
+            Text("\(rs.count) runs").font(.system(size: 13)).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 4).padding(.horizontal, 8)
@@ -79,8 +79,8 @@ struct PlaybooksView: View {
             HStack(spacing: 4) {
                 Button { selected = nil } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "chevron.left").font(.system(size: 11))
-                        Text(p.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                        Image(systemName: "chevron.left").font(.system(size: 13))
+                        Text(p.slug).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                     }
                 }.buttonStyle(.plain)
                 Spacer()
@@ -88,7 +88,7 @@ struct PlaybooksView: View {
                     Button("Run in a new tab") { store.runPlaybook(p.slug) }
                     Button("Run in background (--auto)") { store.runPlaybook(p.slug, auto: true) }
                 } label: {
-                    Label("Run", systemImage: "play.fill").font(.system(size: 11))
+                    Label("Run", systemImage: "play.fill").font(.system(size: 13))
                 }
                 .menuStyle(.borderlessButton)
                 .controlSize(.small)
@@ -99,26 +99,30 @@ struct PlaybooksView: View {
             Divider()
 
             if rs.isEmpty {
-                Text("No runs yet").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("No runs yet").font(.system(size: 14)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(rs) { run in
+                            let done = run.status == "done"
                             Button { store.switchTo(run.slug) } label: {
                                 HStack(spacing: 6) {
-                                    statusDot(run.status)
-                                    Text(run.slug).font(.system(size: 12)).lineLimit(1)
+                                    Text(run.slug).font(.system(size: 14)).lineLimit(1)
                                     Spacer()
-                                    Text(run.status).font(.system(size: 11)).foregroundStyle(.secondary)
-                                    Image(systemName: "arrow.up.forward.app")
-                                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                                    StatusPill(status: run.status)
+                                    if !done {
+                                        Image(systemName: "arrow.up.forward.app")
+                                            .font(.system(size: 12)).foregroundStyle(.tertiary)
+                                    }
                                 }
                                 .contentShape(Rectangle())
                                 .padding(.horizontal, 12).padding(.vertical, 3)
                             }
                             .buttonStyle(.plain)
-                            .help("Open this run in the terminal")
+                            .disabled(done)
+                            .opacity(done ? 0.55 : 1)
+                            .help(done ? "Run is done" : "Open this run in the terminal")
                         }
                     }
                     .padding(.vertical, 4)
@@ -127,8 +131,4 @@ struct PlaybooksView: View {
         }
     }
 
-    private func statusDot(_ status: String) -> some View {
-        let color: Color = status == "in-progress" ? .green : (status == "done" ? .blue : .gray)
-        return Circle().fill(color).frame(width: 6, height: 6)
-    }
 }

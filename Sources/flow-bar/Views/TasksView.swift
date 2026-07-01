@@ -2,17 +2,24 @@ import FlowBarCore
 import SwiftUI
 
 enum TaskFilter: String, CaseIterable, Identifiable {
-    case inProgress = "In progress", backlog = "Backlog", done = "Done", all = "All"
+    case inProgress = "In progress", backlog = "Backlog", done = "Done"
+    case all = "All", archived = "Archived"
     var id: String { rawValue }
-    /// flow --status value (nil = all).
+    /// flow --status value (nil = all). Archived is orthogonal to status.
     var status: String? {
         switch self {
         case .inProgress: return "in-progress"
         case .backlog: return "backlog"
         case .done: return "done"
-        case .all: return nil
+        case .all, .archived: return nil
         }
     }
+}
+
+enum TaskSort: String, CaseIterable, Identifiable {
+    case priority = "Priority"
+    case recentlyUpdated = "Recently updated"
+    var id: String { rawValue }
 }
 
 /// The task list, with a status filter and the global search query.
@@ -22,10 +29,15 @@ struct TasksView: View {
     @ObservedObject var store: Store
     let query: String
     @Binding var filter: TaskFilter
+    @State private var sort: TaskSort = .priority
 
     var body: some View {
         VStack(spacing: 0) {
-            segmentedTabs
+            HStack(spacing: 6) {
+                segmentedTabs
+                sortMenu
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
             content
         }
     }
@@ -37,10 +49,14 @@ struct TasksView: View {
             ForEach(TaskFilter.allCases) { f in
                 Button {
                     filter = f
-                    if f != .inProgress { store.loadBrowse(status: f.status) }
+                    switch f {
+                    case .inProgress: break
+                    case .archived:   store.loadArchived()
+                    default:          store.loadBrowse(status: f.status)
+                    }
                 } label: {
                     Text(f.rawValue)
-                        .font(.system(size: 11, weight: filter == f ? .semibold : .regular))
+                        .font(.system(size: 13, weight: filter == f ? .semibold : .regular))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
@@ -55,7 +71,26 @@ struct TasksView: View {
         .padding(3)
         .background(Theme.track)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 10).padding(.bottom, 6)
+    }
+
+    /// Sort picker (Priority / Recently updated).
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort", selection: $sort) {
+                ForEach(TaskSort.allCases) { s in Text(s.rawValue).tag(s) }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.system(size: 14))
+                .foregroundStyle(sort == .priority ? Color(.sRGB, white: 0.62, opacity: 1) : Color.white)
+                .frame(width: 30, height: 27)
+                .background(sort == .priority ? Theme.track : Theme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort: \(sort.rawValue)")
     }
 
     @ViewBuilder
@@ -84,14 +119,21 @@ struct TasksView: View {
 
     private var filtered: [FlowTask] {
         let base = source.filtered(by: query)
-        return filter == .inProgress ? base.sortedByPriority() : base.sortedByStatusThenPriority()
+        switch sort {
+        case .recentlyUpdated:
+            return base.sortedByRecentlyUpdated()
+        case .priority:
+            return filter == .inProgress ? base.sortedByPriority() : base.sortedByStatusThenPriority()
+        }
     }
 
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
                 ForEach(filtered) { task in
-                    TaskRow(task: task) { store.switchTo(task.slug) }
+                    TaskRow(task: task, action: { store.switchTo(task.slug) },
+                            onPeek: { store.peekBrief(task.slug) },
+                            showStatus: filter == .all || filter == .archived)
                 }
             }
             .padding(.vertical, 4)
@@ -100,7 +142,7 @@ struct TasksView: View {
 
     private func centered(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(.system(size: 14))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -109,7 +151,7 @@ struct TasksView: View {
         VStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
             Text(text)
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(4)

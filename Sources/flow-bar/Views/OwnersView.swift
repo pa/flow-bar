@@ -29,7 +29,7 @@ struct OwnersView: View {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if owners.isEmpty {
                 Text(query.isEmpty ? "No owners" : "No matches")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .font(.system(size: 14)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -49,14 +49,14 @@ struct OwnersView: View {
         HStack(spacing: 8) {
             statusDot(o.status)
             VStack(alignment: .leading, spacing: 2) {
-                Text(o.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text("\(o.status) · every \(o.every)").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(o.slug).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                Text("\(o.status) · every \(o.every)").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
             if let rel = o.nextTickRelative {
-                Text(rel).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+                Text(rel).font(.system(size: 13)).foregroundStyle(.tertiary).lineLimit(1)
             }
-            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 4).padding(.horizontal, 8)
@@ -70,8 +70,8 @@ struct OwnersView: View {
             HStack(spacing: 6) {
                 Button { selected = nil } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "chevron.left").font(.system(size: 11))
-                        Text(o.slug).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                        Image(systemName: "chevron.left").font(.system(size: 13))
+                        Text(o.slug).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                     }
                 }.buttonStyle(.plain)
                 Spacer()
@@ -79,7 +79,7 @@ struct OwnersView: View {
                     Button("Tick now (new tab)") { store.ownerTick(o.slug) }
                     Button("Tick in background (--auto)") { store.ownerTick(o.slug, auto: true) }
                 } label: {
-                    Label("Tick", systemImage: "bolt.fill").font(.system(size: 11))
+                    Label("Tick", systemImage: "bolt.fill").font(.system(size: 13))
                 }
                 .menuStyle(.borderlessButton).controlSize(.small).fixedSize()
                 .help("Wake this owner now")
@@ -89,16 +89,16 @@ struct OwnersView: View {
                 } label: {
                     Label(o.status == "active" ? "Pause" : "Resume",
                           systemImage: o.status == "active" ? "pause.fill" : "play.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: 13))
                 }
                 .controlSize(.small)
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
 
             HStack(spacing: 4) {
-                Image(systemName: "clock").font(.system(size: 9)).foregroundStyle(.tertiary)
+                Image(systemName: "clock").font(.system(size: 10)).foregroundStyle(.tertiary)
                 Text("next tick \(o.nextTickRelative ?? o.nextTick ?? "—")")
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .font(.system(size: 13)).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 10).padding(.bottom, 4)
             Divider()
@@ -106,18 +106,18 @@ struct OwnersView: View {
             if store.ownerTasksLoading {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if tasks.isEmpty {
-                Text("No tasks managed").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("No tasks managed").font(.system(size: 14)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         if !questions.isEmpty {
                             sectionLabel("Questions for you", questions.count)
-                            ForEach(questions) { t in TaskRow(task: t) { store.switchTo(t.slug) } }
+                            ForEach(questions) { t in TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }) }
                         }
                         if !others.isEmpty {
                             sectionLabel("Managed tasks", others.count)
-                            ForEach(others) { t in TaskRow(task: t) { store.switchTo(t.slug) } }
+                            ForEach(others) { t in TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }) }
                         }
                     }
                     .padding(.vertical, 4)
@@ -128,7 +128,7 @@ struct OwnersView: View {
 
     private func sectionLabel(_ title: String, _ n: Int) -> some View {
         Text("\(title.uppercased())  \(n)")
-            .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
+            .font(.system(size: 12, weight: .bold)).foregroundStyle(.tertiary)
             .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
     }
 

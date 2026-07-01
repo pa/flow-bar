@@ -28,8 +28,8 @@ struct InboxView: View {
         return Group {
             if empty {
                 VStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle").font(.system(size: 24)).foregroundStyle(.green)
-                    Text("Nothing needs you").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Image(systemName: "checkmark.circle").font(.system(size: 28)).foregroundStyle(.green)
+                    Text("Nothing needs you").font(.system(size: 15)).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -37,15 +37,15 @@ struct InboxView: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         groupHeader("Questions for you", m.questions.count, "questionmark.bubble", .orange)
                         ForEach(m.questions.sortedByPriority()) { t in
-                            TaskRow(task: t) { store.switchTo(t.slug) }
+                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) })
                         }
                         groupHeader("Overdue", overdue.count, "calendar.badge.exclamationmark", .red)
                         ForEach(overdue) { t in
-                            TaskRow(task: t) { store.switchTo(t.slug) }
+                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) })
                         }
                         groupHeader("Waiting on", waiting.count, "hourglass", .secondary)
                         ForEach(waiting) { t in
-                            TaskRow(task: t) { store.switchTo(t.slug) }
+                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) })
                         }
                     }
                     .padding(.vertical, 4)
@@ -58,9 +58,9 @@ struct InboxView: View {
     private func groupHeader(_ title: String, _ count: Int, _ icon: String, _ color: Color) -> some View {
         if count > 0 {
             HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(color)
-                Text(title.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
-                Text("\(count)").font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
+                Image(systemName: icon).font(.system(size: 13)).foregroundStyle(color)
+                Text(title.uppercased()).font(.system(size: 12, weight: .bold)).foregroundStyle(.tertiary)
+                Text("\(count)").font(.system(size: 12, weight: .bold)).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
         }

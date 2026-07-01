@@ -6,10 +6,10 @@ import Foundation
 func task(_ slug: String, name: String = "", status: String = "in-progress",
           priority: String = "medium", project: String? = nil, stale: Bool? = nil,
           live: Bool? = nil, waitingOn: String? = nil, dueInDays: Int? = nil,
-          tags: [String]? = nil) -> FlowTask {
+          tags: [String]? = nil, updated: String? = nil) -> FlowTask {
     FlowTask(slug: slug, name: name, status: status, priority: priority,
              project: project, stale: stale, waitingOn: waitingOn, live: live,
-             tags: tags, dueInDays: dueInDays)
+             updated: updated, tags: tags, dueInDays: dueInDays)
 }
 
 // MARK: - Model decoding
@@ -84,6 +84,15 @@ let prioritized = [
 ]
 T.equal(prioritized.sortedByPriority().map(\.slug), ["a", "a2", "b", "c"], "sort by priority")
 
+let byUpdated = [
+    task("old", updated: "2026-06-01T10:00:00+05:30"),
+    task("newest", updated: "2026-07-01T09:00:00+05:30"),
+    task("mid", updated: "2026-06-15T12:00:00+05:30"),
+    task("nodate", updated: nil),
+]
+T.equal(byUpdated.sortedByRecentlyUpdated().map(\.slug), ["newest", "mid", "old", "nodate"],
+        "sort by recently updated (nil last)")
+
 let mixed = [
     task("done1", status: "done", priority: "high"),
     task("bl", status: "backlog", priority: "high"),
@@ -121,6 +130,82 @@ T.equal(tags.first?.tag, "frammer", "tag '#' stripped")
 T.equal(tags.first?.count, 36, "tag count")
 T.equal(tags.last?.tag, "owner:granola-intake", "kv tag")
 T.expect(FlowClient.parseTags("TAG COUNT").isEmpty, "tags header skipped")
+
+// MARK: - Archived decode
+
+print("Archived")
+let archJSON = #"[{"slug":"a","name":"A","status":"backlog","priority":"high","archived":true},{"slug":"b","name":"B","status":"done","priority":"low"}]"#
+let archTasks = try! JSONDecoder().decode([FlowTask].self, from: archJSON.data(using: .utf8)!)
+T.expect(archTasks[0].isArchived, "archived:true decodes")
+T.expect(!archTasks[1].isArchived, "missing archived key → not archived")
+
+// MARK: - flow stats
+
+print("Stats")
+let statsText = """
+flow stats — all-time
+
+  Your AI remembered, so you didn't.
+  flow recalled your context 346 times — you never re-explained it.
+    resume 68 · reference 53 · cross-task 187 · kb 38
+
+  Memory
+    Context re-established : ~701,842 tokens you never re-typed (est.)
+    Instant resumes        : 68× — flow dropped you straight back into work
+
+  Shipped
+    Tasks done       : 71
+    Tokens processed : 5,011,319,778
+    KB facts         : 260
+
+  Addressed by name, not a UUID : 240
+  Weekly recalls   : ▁▁▂▁▅█▃▄▁▄▁
+"""
+let st = FlowClient.parseStats(statsText)
+T.equal(st.contextRecalls, 346, "context recalls")
+T.equal(st.resumes, 68, "recall breakdown: resume")
+T.equal(st.references, 53, "recall breakdown: reference")
+T.equal(st.crossTask, 187, "recall breakdown: cross-task")
+T.equal(st.kbRecalls, 38, "recall breakdown: kb")
+T.equal(st.tokensReEstablished, 701842, "tokens re-established (commas stripped)")
+T.equal(st.instantResumes, 68, "instant resumes (not the breakdown resume)")
+T.equal(st.tasksDone, 71, "tasks done")
+T.equal(st.kbFacts, 260, "kb facts")
+T.equal(st.weeklyRecalls, "▁▁▂▁▅█▃▄▁▄▁", "weekly recalls sparkline")
+T.expect(!st.isEmpty, "stats not empty")
+T.expect(FlowClient.parseStats("").isEmpty, "empty stats input → isEmpty")
+
+// MARK: - show task paths
+
+print("Show task paths")
+let showText = """
+slug:          flow-bar
+name:          Build flow-bar menubar app
+status:        in-progress
+work_dir:      /Users/x/dev/flow-bar  [known]
+brief:         /Users/x/.flow/tasks/flow-bar/brief.md
+updates:
+  - /Users/x/.flow/tasks/flow-bar/updates/2026-06-30-v1-built.md
+  - /Users/x/.flow/tasks/flow-bar/updates/2026-07-01-released.md
+other:         (none)
+kb:
+  - /Users/x/.flow/kb/user.md
+  - /Users/x/.flow/kb/org.md
+"""
+let paths = FlowClient.parseShowPaths(showText)
+T.equal(paths.name, "Build flow-bar menubar app", "show: name")
+T.equal(paths.status, "in-progress", "show: status")
+T.expect(!paths.archived, "show: not archived")
+T.equal(paths.brief, "/Users/x/.flow/tasks/flow-bar/brief.md", "show: brief path")
+let archivedPaths = FlowClient.parseShowPaths("slug:  x  (archived)\nstatus:  backlog\narchived:  2026-05-10T18:55:46+05:30\n")
+T.expect(archivedPaths.archived, "show: archived flag from archived: line")
+T.equal(paths.updates.count, 2, "show: only updates collected, not kb")
+T.equal(paths.updates.last, "/Users/x/.flow/tasks/flow-bar/updates/2026-07-01-released.md", "show: last update")
+let (upDate, upTitle) = FlowClient.splitUpdateName("2026-07-01-released-and-open-sourced.md")
+T.equal(upDate, "2026-07-01", "update date parsed")
+T.equal(upTitle, "released and open sourced", "update title humanised")
+let (nonDate, _) = FlowClient.splitUpdateName("notes.md")
+T.equal(nonDate, "notes", "non-dated update falls back to base name")
 
 // MARK: - Dashboard metrics
 

@@ -66,7 +66,7 @@ struct MenuContentView: View {
             Divider()
             pane
         }
-        .frame(width: 440, height: 520)
+        .frame(width: 520, height: 560)
         // Explicit OPAQUE fill (see Theme) — never the dynamic system colors,
         // which render translucent over the popover's vibrancy on older SDKs.
         .background(Theme.bg)
@@ -77,6 +77,7 @@ struct MenuContentView: View {
     /// Reset navigation to the In-progress tab and refresh — run on every
     /// popover open (the view is reused, so this is signalled via openNonce).
     private func prepareForOpen() {
+        store.closePeek()
         section = .tasks
         taskFilter = .inProgress
         query = ""
@@ -91,11 +92,12 @@ struct MenuContentView: View {
         VStack(spacing: 4) {
             ForEach(Section.allCases) { s in
                 Button {
+                    store.closePeek()
                     section = s
                     onSectionChange(s)
                 } label: {
                     Image(systemName: s.icon)
-                        .font(.system(size: 15))
+                        .font(.system(size: 17))
                         .frame(maxWidth: .infinity, minHeight: 32)
                         .background(section == s ? Color.accentColor.opacity(0.2) : .clear)
                         .foregroundStyle(section == s ? Color.accentColor : .secondary)
@@ -103,7 +105,7 @@ struct MenuContentView: View {
                         .overlay(alignment: .topTrailing) {
                             if let n = railBadge(s), n > 0 {
                                 Text("\(n)")
-                                    .font(.system(size: 8, weight: .bold))
+                                    .font(.system(size: 9, weight: .bold))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 3).padding(.vertical, 1)
                                     .background(Circle().fill(.red).scaleEffect(1.3))
@@ -125,16 +127,22 @@ struct MenuContentView: View {
 
     // MARK: Pane
 
+    @ViewBuilder
     private var pane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if section.isSearchable {
-                searchBar
+        if let slug = store.peekedSlug {
+            // Brief peek takes over the whole content pane (its own header).
+            TaskDetailView(store: store, slug: slug)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                if section.isSearchable {
+                    searchBar
+                }
+                Divider()
+                sectionView
+                Divider()
+                footer
             }
-            Divider()
-            sectionView
-            Divider()
-            footer
         }
     }
 
@@ -158,14 +166,20 @@ struct MenuContentView: View {
 
     // MARK: Header / search / footer
 
+    /// The tasks section is a single rail item but has status tabs, so its
+    /// header reflects the active tab (e.g. "Archived") rather than "In progress".
+    private var headerTitle: String {
+        section == .tasks ? taskFilter.rawValue : section.title
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: section.icon).font(.system(size: 14)).foregroundStyle(.tint)
-            Text(section.title).font(.system(size: 15, weight: .bold))
-            Text(countLabel).font(.system(size: 12)).foregroundStyle(.secondary)
+            Image(systemName: section.icon).font(.system(size: 16)).foregroundStyle(.tint)
+            Text(headerTitle).font(.system(size: 17, weight: .bold))
+            Text(countLabel).font(.system(size: 14)).foregroundStyle(.secondary)
             Spacer()
             if isActiveLoading { ProgressView().controlSize(.small) }
-            Button(action: refreshActive) { Image(systemName: "arrow.clockwise").font(.system(size: 13)) }
+            Button(action: refreshActive) { Image(systemName: "arrow.clockwise").font(.system(size: 15)) }
                 .buttonStyle(.plain).help("Refresh")
         }
         .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
@@ -173,9 +187,9 @@ struct MenuContentView: View {
 
     private var searchBar: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundStyle(.secondary)
-            TextField("Search \(section.title.lowercased())…", text: $query)
-                .textFieldStyle(.plain).font(.system(size: 14))
+            Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(.secondary)
+            TextField("Search \(headerTitle.lowercased())…", text: $query)
+                .textFieldStyle(.plain).font(.system(size: 16))
                 .focused($searchFocused)
                 .onSubmit { if section == .tasks { switchToFirstTask() } }
             if !query.isEmpty {
@@ -230,8 +244,8 @@ struct MenuContentView: View {
                 Toggle("Monochrome icon", isOn: $store.monochromeIcon)
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "externaldrive").font(.system(size: 11))
-                    Text(store.activeProfile.name).font(.system(size: 11))
+                    Image(systemName: "externaldrive").font(.system(size: 13))
+                    Text(store.activeProfile.name).font(.system(size: 13))
                 }
             }
             .menuStyle(.borderlessButton).fixedSize()
@@ -240,7 +254,7 @@ struct MenuContentView: View {
             Spacer()
 
             Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
+                .buttonStyle(.plain).font(.system(size: 14)).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
     }
@@ -284,7 +298,7 @@ struct MenuContentView: View {
 
     private var isActiveLoading: Bool {
         switch section {
-        case .tasks: return store.isLoading
+        case .tasks: return taskFilter == .inProgress ? store.isLoading : store.browseLoading
         default: return store.metricsLoading
         }
     }
@@ -292,8 +306,9 @@ struct MenuContentView: View {
     private var countLabel: String {
         switch section {
         case .tasks:
-            let total = store.tasks.count
-            let shown = store.tasks.filtered(by: query).count
+            let src = taskFilter == .inProgress ? store.tasks : store.browseTasks
+            let total = src.count
+            let shown = src.filtered(by: query).count
             return (query.isEmpty || shown == total) ? "\(total)" : "\(shown) of \(total)"
         case .inbox:
             guard let m = store.metrics else { return "" }

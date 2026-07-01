@@ -198,11 +198,13 @@ public struct FlowClient: Sendable {
 
     /// Decode `flow list tasks ... --format json` into `[FlowTask]`.
     public func listTasks(status: String? = nil, tag: String? = nil,
-                          project: String? = nil) throws -> [FlowTask] {
+                          project: String? = nil,
+                          includeArchived: Bool = false) throws -> [FlowTask] {
         var args = ["list", "tasks"]
         if let status { args += ["--status", status] }
         if let tag { args += ["--tag", tag] }
         if let project { args += ["--project", project] }
+        if includeArchived { args += ["--include-archived"] }
         args += ["--format", "json"]
         return try decodeJSON([FlowTask].self, args)
     }
@@ -278,6 +280,151 @@ public struct FlowClient: Sendable {
             tags.append(TagCount(tag: tag, count: count))
         }
         return tags
+    }
+
+    /// Assemble a task's readable detail (brief + recent updates). Uses
+    /// `flow show task <slug>` for the *paths* (the CLI is the source of truth
+    /// for where a task's files live), then reads those markdown files. Reads
+    /// files, never flow.db.
+    public func taskDetail(_ slug: String) throws -> TaskDetail {
+        let (data, stderr, code) = try Self.run("flow", ["show", "task", slug])
+        guard code == 0 else {
+            throw FlowClientError.commandFailed(
+                command: "flow show task \(slug)", code: code, stderr: stderr)
+        }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        let paths = Self.parseShowPaths(text)
+
+        func read(_ path: String) -> String {
+            (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        }
+        let brief = paths.brief.map(read) ?? ""
+        // `flow show task` lists updates oldest→newest; show newest first.
+        let updates: [TaskUpdate] = paths.updates.reversed().map { path in
+            let file = (path as NSString).lastPathComponent
+            let (date, title) = Self.splitUpdateName(file)
+            return TaskUpdate(filename: file, date: date, title: title, content: read(path))
+        }
+        return TaskDetail(slug: slug, name: paths.name ?? slug,
+                          status: paths.status ?? "", archived: paths.archived,
+                          brief: brief, updates: updates)
+    }
+
+    /// Parse `flow show task` text for the fields we surface. Pure &
+    /// unit-testable. Top-level `key: value` lines set the section; indented
+    /// `- <path>` lines belong to the current section (so `updates:` items are
+    /// collected but the following `kb:` items are not).
+    public static func parseShowPaths(_ text: String)
+        -> (name: String?, status: String?, archived: Bool, brief: String?, updates: [String])
+    {
+        var name: String?
+        var status: String?
+        var archived = false
+        var brief: String?
+        var updates: [String] = []
+        var section = ""
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+            if let f = line.first, f == " " || f == "\t" {
+                // Continuation (list item) — belongs to the current section.
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if section == "updates", t.hasPrefix("- ") {
+                    updates.append(String(t.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+                }
+                continue
+            }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
+            let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            section = key
+            switch key {
+            case "name":     name = value.isEmpty ? nil : value
+            case "status":   status = value.isEmpty ? nil : value
+            case "archived": archived = !value.isEmpty  // "archived: <timestamp>"
+            case "brief":    brief = value.isEmpty ? nil : value
+            default:         break
+            }
+        }
+        return (name, status, archived, brief, updates)
+    }
+
+    /// Split an update filename into (date, humanised title).
+    /// "2026-07-01-released-and-open-sourced.md" -> ("2026-07-01", "released and open sourced").
+    public static func splitUpdateName(_ filename: String) -> (date: String, title: String) {
+        let base = filename.hasSuffix(".md") ? String(filename.dropLast(3)) : filename
+        let parts = base.split(separator: "-", maxSplits: 3, omittingEmptySubsequences: false)
+        // Expect YYYY-MM-DD-rest.
+        if parts.count >= 4, parts[0].count == 4, Int(parts[0]) != nil {
+            let date = parts[0...2].joined(separator: "-")
+            let title = parts[3].replacingOccurrences(of: "-", with: " ")
+            return (date, title)
+        }
+        return (base, base.replacingOccurrences(of: "-", with: " "))
+    }
+
+    /// `flow stats` — text only. flow's "your AI memory did the remembering"
+    /// numbers. Never fatal to the dashboard: callers wrap in `try?`.
+    public func flowStats() throws -> FlowStats {
+        let (data, stderr, code) = try Self.run("flow", ["stats"])
+        guard code == 0 else {
+            throw FlowClientError.commandFailed(
+                command: "flow stats", code: code, stderr: stderr)
+        }
+        return Self.parseStats(String(data: data, encoding: .utf8) ?? "")
+    }
+
+    /// Parse `flow stats` text (pure — unit-testable). Tolerant: matches each
+    /// labelled line by substring and pulls integers out, so wording tweaks or
+    /// reordering don't break it. Returns an all-nil `FlowStats` on empty input.
+    public static func parseStats(_ text: String) -> FlowStats {
+        // All integer runs in a string, commas stripped ("~701,842" -> 701842).
+        func ints(_ str: String) -> [Int] {
+            var out: [Int] = []
+            var cur = ""
+            for ch in str {
+                if ch.isNumber || ch == "," { cur.append(ch) }
+                else if !cur.isEmpty {
+                    if let n = Int(cur.replacingOccurrences(of: ",", with: "")) { out.append(n) }
+                    cur = ""
+                }
+            }
+            if !cur.isEmpty, let n = Int(cur.replacingOccurrences(of: ",", with: "")) { out.append(n) }
+            return out
+        }
+
+        var s = FlowStats()
+        for raw in text.split(separator: "\n") {
+            let line = String(raw)
+            let lower = line.lowercased()
+            if lower.contains("recalled your context") {
+                s.contextRecalls = ints(line).first
+            } else if lower.contains("instant resumes") {
+                s.instantResumes = ints(line).first
+            } else if lower.contains("context re-established") {
+                s.tokensReEstablished = ints(line).first
+            } else if lower.contains("tasks done") {
+                s.tasksDone = ints(line).last
+            } else if lower.contains("kb facts") {
+                s.kbFacts = ints(line).last
+            } else if lower.contains("weekly recalls") {
+                if let colon = line.firstIndex(of: ":") {
+                    let glyphs = line[line.index(after: colon)...]
+                        .trimmingCharacters(in: .whitespaces)
+                    s.weeklyRecalls = glyphs.isEmpty ? nil : glyphs
+                }
+            } else if lower.contains("·"), lower.contains("resume"), lower.contains("reference") {
+                // Recall breakdown: "resume 68 · reference 53 · cross-task 187 · kb 38"
+                for part in line.split(separator: "·") {
+                    let p = part.lowercased()
+                    let n = ints(String(part)).first
+                    if p.contains("cross-task") { s.crossTask = n }
+                    else if p.contains("resume") { s.resumes = n }
+                    else if p.contains("reference") { s.references = n }
+                    else if p.contains("kb") { s.kbRecalls = n }
+                }
+            }
+        }
+        return s
     }
 
     /// Build the Dashboard metrics in one shot (all local CLI calls).
