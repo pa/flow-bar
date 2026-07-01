@@ -21,6 +21,7 @@ jobs:
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          CERT_PEM: ${{ secrets.MACOS_CERT_PEM }}
         run: |
           set -euo pipefail
           P12="$RUNNER_TEMP/signing.p12"
@@ -34,7 +35,7 @@ jobs:
           security import "$P12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
-          openssl pkcs12 -in "$P12" -clcerts -nokeys -legacy -passin pass:"$CERT_PASSWORD" -out "$PEM"
+          echo "$CERT_PEM" | base64 --decode > "$PEM"
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$PEM"
           echo "== valid codesigning identities =="
           security find-identity -v -p codesigning "$KEYCHAIN"
