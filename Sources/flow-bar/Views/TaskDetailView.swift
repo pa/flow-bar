@@ -92,7 +92,7 @@ struct TaskDetailView: View {
                     if d.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         emptyNote("No brief written for this task yet.")
                     } else {
-                        MarkdownText(d.brief)
+                        MarkdownText(Self.dropLeadingTitle(d.brief))
                     }
 
                     if !d.updates.isEmpty {
@@ -120,12 +120,27 @@ struct TaskDetailView: View {
                 Text(u.title)
                     .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
             }
-            MarkdownText(u.content)
+            MarkdownText(Self.dropLeadingTitle(u.content))
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.tile)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Briefs and update notes conventionally start with a `# Title` line that
+    /// repeats the name/date the peek already shows in its own header. Drop that
+    /// leading H1 (and any blank lines after it) to avoid the duplicate title.
+    static func dropLeadingTitle(_ md: String) -> String {
+        var lines = md.components(separatedBy: "\n")
+        if let first = lines.first,
+           first.trimmingCharacters(in: .whitespaces).hasPrefix("# ") {
+            lines.removeFirst()
+            while let f = lines.first, f.trimmingCharacters(in: .whitespaces).isEmpty {
+                lines.removeFirst()
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func emptyNote(_ text: String) -> some View {

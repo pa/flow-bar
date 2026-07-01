@@ -114,11 +114,23 @@ public struct FlowClient: Sendable {
     /// the app invokes flow.
     static func log(_ message: String) {
         let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
-        let path = NSHomeDirectory() + "/Library/Logs/flow-bar.log"
+        let dir = NSHomeDirectory() + "/Library/Logs"
+        let path = dir + "/flow-bar.log"
+        let fm = FileManager.default
+        // Rotate when the log passes ~512 KB: move it to .1 (replacing any
+        // previous) and start fresh. Total footprint stays ≲ 1 MB across the
+        // two files — enough history for support, never unbounded.
+        if let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? UInt64,
+           size > 512 * 1024 {
+            let rotated = path + ".1"
+            try? fm.removeItem(atPath: rotated)
+            try? fm.moveItem(atPath: path, toPath: rotated)
+        }
         guard let data = line.data(using: .utf8) else { return }
         if let h = FileHandle(forWritingAtPath: path) {
             h.seekToEndOfFile(); h.write(data); try? h.close()
         } else {
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try? data.write(to: URL(fileURLWithPath: path))
         }
     }

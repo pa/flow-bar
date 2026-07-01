@@ -54,9 +54,12 @@ struct MenuContentView: View {
     @FocusState private var searchFocused: Bool
 
     /// flow terminal backends ($FLOW_TERM values). flow-bar is a GUI app with
-    /// no terminal env to detect from, so the user picks explicitly.
+    /// no terminal env to detect from, so the user picks explicitly. (kitty is
+    /// omitted: its `kitty @` remote control needs the instance's socket in
+    /// $KITTY_LISTEN_ON, which a GUI/menubar launch doesn't have — so it can't
+    /// be driven reliably from here.)
     static let terminalOptions: [(label: String, value: String)] = [
-        ("zellij", "zellij"), ("kitty", "kitty"), ("iTerm2", "iterm"),
+        ("zellij", "zellij"), ("iTerm2", "iterm"),
         ("Terminal.app", "terminal"), ("Warp", "warp"), ("Ghostty", "ghostty"),
     ]
 
