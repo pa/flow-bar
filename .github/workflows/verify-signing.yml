@@ -1,0 +1,56 @@
+name: verify-signing
+
+# Manual check that the persistent self-signed cert signs the app with a stable,
+# cert-based Designated Requirement (so TCC grants survive upgrades). Does NOT
+# create a release. Run from the Actions tab or `gh workflow run verify-signing`.
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          P12="$RUNNER_TEMP/signing.p12"
+          PEM="$RUNNER_TEMP/signing.pem"
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KC_PASS="ci-signing-pass"
+          echo "$CERT_P12" | base64 --decode > "$P12"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+          openssl pkcs12 -in "$P12" -clcerts -nokeys -legacy -passin pass:"$CERT_PASSWORD" -out "$PEM"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$PEM"
+          echo "== valid codesigning identities =="
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          echo "CODESIGN_IDENTITY=flow-bar-signing" >> "$GITHUB_ENV"
+
+      - name: Build app bundle
+        run: ./build-app.sh
+
+      - name: Verify signature + designated requirement
+        run: |
+          echo "== codesign -dvv =="
+          codesign -dvv flow-bar.app 2>&1 | grep -iE 'Authority|Identifier=|Signature' || true
+          echo "== designated requirement (TCC keys on this) =="
+          codesign -d -r- flow-bar.app 2>&1 | tail -1
+          if ! codesign -dvv flow-bar.app 2>&1 | grep -q 'Authority=flow-bar-signing'; then
+            echo "::error::NOT signed with flow-bar-signing"
+            exit 1
+          fi
+          echo "OK — signed with the persistent cert; DR is stable across versions."

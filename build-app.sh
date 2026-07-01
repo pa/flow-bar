@@ -19,10 +19,14 @@ cp "${BIN}" "${APP}/Contents/MacOS/flow-bar"
 cp "Resources/Info.plist" "${APP}/Contents/Info.plist"
 cp "Resources/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
 
-# Ad-hoc code signature so macOS will run the bundle locally without a
-# developer cert. (Distribution/notarization is a later concern.)
-echo "==> ad-hoc codesign"
-codesign --force --deep --sign - "${APP}" >/dev/null 2>&1 || \
+# Code signature. Defaults to ad-hoc ("-") for local dev builds. Release CI
+# sets CODESIGN_IDENTITY to a STABLE self-signed cert so the app's Designated
+# Requirement stays constant across versions — that's what lets macOS keep
+# Accessibility/Automation grants after an upgrade (ad-hoc's identity changes
+# every build, so TCC treats each update as a new app and drops the grant).
+SIGN_ID="${CODESIGN_IDENTITY:--}"
+echo "==> codesign (identity: ${SIGN_ID})"
+codesign --force --deep --sign "${SIGN_ID}" "${APP}" >/dev/null 2>&1 || \
     echo "    (codesign skipped — unsigned bundle will still run locally)"
 
 echo "==> built ${PWD}/${APP}"
