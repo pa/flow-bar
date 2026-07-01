@@ -100,6 +100,23 @@ public struct TaskDetail: Hashable, Sendable {
     public var isDone: Bool { status == "done" }
     /// A done or archived task has nothing meaningful to switch to.
     public var canOpen: Bool { status != "done" && !archived }
+
+    /// The whole peek as markdown for the clipboard: title, slug, brief, and
+    /// every recent update (newest first, as shown).
+    public var clipboardText: String {
+        var parts: [String] = ["# \(name)", slug]
+        let b = brief.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !b.isEmpty { parts.append(""); parts.append(b) }
+        if !updates.isEmpty {
+            parts.append(""); parts.append("## Recent updates")
+            for u in updates {
+                parts.append(""); parts.append("### \(u.date) — \(u.title)")
+                let c = u.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !c.isEmpty { parts.append(c) }
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
 }
 
 /// Parsed `flow stats` output — flow's own "your AI memory did the

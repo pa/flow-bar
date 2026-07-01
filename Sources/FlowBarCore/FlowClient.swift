@@ -130,13 +130,27 @@ public struct FlowClient: Sendable {
     /// code — callers run this off the main actor and use the code to drive the
     /// menubar spinner→✓ so completion isn't signalled before the tab opens.
     @discardableResult
-    static func spawnDisclaimed(_ binaryName: String, _ args: [String]) throws -> Int32 {
+    static func spawnDisclaimed(_ binaryName: String, _ args: [String]) throws
+        -> (code: Int32, output: String)
+    {
         let path = try resolve(binaryName)
+        let flowTerm = UserDefaults.standard.string(forKey: flowTermKey)
+
+        // AppleScript-driven backends (flow shells out to osascript for these)
+        // need the macOS Automation grant. If we DISCLAIM TCC responsibility,
+        // `flow` becomes the responsible process and a menubar agent can't
+        // surface the permission prompt → silent -1743. So for those backends
+        // we do NOT disclaim: flow-bar stays the responsible process, so macOS
+        // shows a normal, grantable "flow-bar wants to control <app>" prompt.
+        // zellij/kitty use plain subprocesses (no Apple events, no TCC), so
+        // disclaim there is harmless and we keep it (flow owns its terminal).
+        let appleScriptBackends: Set<String> = ["iterm", "terminal", "warp", "ghostty"]
+        let disclaim = !(flowTerm.map { appleScriptBackends.contains($0) } ?? false)
 
         var attr: posix_spawnattr_t?
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
-        _ = responsibility_spawnattrs_setdisclaim(&attr, 1)
+        if disclaim { _ = responsibility_spawnattrs_setdisclaim(&attr, 1) }
 
         var envDict = ProcessInfo.processInfo.environment
         envDict["PATH"] = searchPATH
@@ -147,9 +161,33 @@ public struct FlowClient: Sendable {
         }
         // Tell flow which terminal backend to use (GUI launches don't inherit
         // $ZELLIJ/$TERM_PROGRAM). flow honors $FLOW_TERM as a backend override.
-        if let term = UserDefaults.standard.string(forKey: flowTermKey), !term.isEmpty {
+        if let term = flowTerm, !term.isEmpty {
             envDict["FLOW_TERM"] = term
+            // flow's Detect() checks $ZELLIJ and kitty's markers BEFORE
+            // $FLOW_TERM. If flow-bar was launched from inside zellij/kitty it
+            // inherited those, which would shadow the user's explicit pick (the
+            // whole picker would be ignored). Clear any marker that selects a
+            // DIFFERENT backend than the one chosen, so the pick wins.
+            if term != "zellij" { envDict.removeValue(forKey: "ZELLIJ") }
+            if term != "kitty" {
+                envDict.removeValue(forKey: "KITTY_WINDOW_ID")
+                if envDict["TERM"] == "xterm-kitty" { envDict["TERM"] = "xterm-256color" }
+            }
         }
+
+        // Redirect the child's stdout+stderr to a temp file so we can capture
+        // flow's error message (e.g. an osascript/Automation-permission failure)
+        // — a bare posix_spawn would inherit our fds and the reason would be
+        // lost, leaving only an opaque ⚠. This does NOT affect the TCC disclaim.
+        let outPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("flow-bar-spawn-\(ProcessInfo.processInfo.globallyUniqueString).log")
+        var fa: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fa)
+        defer { posix_spawn_file_actions_destroy(&fa) }
+        _ = outPath.withCString { cpath in
+            posix_spawn_file_actions_addopen(&fa, 1, cpath, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        }
+        _ = posix_spawn_file_actions_adddup2(&fa, 1, 2)  // stderr → same file as stdout
 
         let argv: [UnsafeMutablePointer<CChar>?] = ([path] + args).map { strdup($0) } + [nil]
         let envp: [UnsafeMutablePointer<CChar>?] = envDict.map { strdup("\($0.key)=\($0.value)") } + [nil]
@@ -159,9 +197,9 @@ public struct FlowClient: Sendable {
         }
 
         var pid: pid_t = 0
-        let rc = posix_spawn(&pid, path, nil, &attr, argv, envp)
-        log("spawnDisclaimed: \(binaryName) \(args.joined(separator: " "))  ->  rc=\(rc) pid=\(pid)  FLOW_ROOT=\(envDict["FLOW_ROOT"] ?? "<default>")")
+        let rc = posix_spawn(&pid, path, &fa, &attr, argv, envp)
         guard rc == 0 else {
+            log("spawnDisclaimed: \(binaryName) \(args.joined(separator: " "))  ->  posix_spawn rc=\(rc) (\(String(cString: strerror(rc))))")
             throw FlowClientError.commandFailed(
                 command: "\(binaryName) \(args.joined(separator: " "))",
                 code: rc, stderr: String(cString: strerror(rc)))
@@ -170,9 +208,12 @@ public struct FlowClient: Sendable {
         // terminal) so the caller only signals completion once the tab is up.
         var status: Int32 = 0
         waitpid(pid, &status, 0)
-        // Decode the wait status into a conventional exit code.
-        if (status & 0x7f) == 0 { return (status >> 8) & 0xff }  // WIFEXITED → WEXITSTATUS
-        return 1  // killed by a signal → treat as failure
+        let code: Int32 = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 1  // WIFEXITED→WEXITSTATUS, else signal
+        let output = ((try? String(contentsOfFile: outPath, encoding: .utf8)) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try? FileManager.default.removeItem(atPath: outPath)
+        log("spawnDisclaimed: \(binaryName) \(args.joined(separator: " "))  ->  exit=\(code)  FLOW_TERM=\(flowTerm ?? "<unset>")  disclaim=\(disclaim)  FLOW_ROOT=\(envDict["FLOW_ROOT"] ?? "<default>")\(output.isEmpty ? "" : "\n  output: \(output)")")
+        return (code, output)
     }
 
     // MARK: Reads
@@ -449,8 +490,8 @@ public struct FlowClient: Sendable {
     /// (Phase 3 wires this to the UI; defined here so the bridge is complete.)
     @discardableResult
     public func doTask(_ slug: String) throws -> (stderr: String, code: Int32) {
-        let code = try Self.spawnDisclaimed("flow", ["do", slug])  // flow owns the terminal it opens
-        return ("", code)
+        let (code, output) = try Self.spawnDisclaimed("flow", ["do", slug])  // flow owns the terminal it opens
+        return (output, code)
     }
 
     /// Run a playbook. `auto` runs it headlessly in the background (no tab);
@@ -463,8 +504,8 @@ public struct FlowClient: Sendable {
             let (_, stderr, code) = try Self.run("flow", ["run", "playbook", slug, "--auto"])
             return (stderr, code)
         }
-        let code = try Self.spawnDisclaimed("flow", ["run", "playbook", slug])
-        return ("", code)
+        let (code, output) = try Self.spawnDisclaimed("flow", ["run", "playbook", slug])
+        return (output, code)
     }
 
     /// Wake an owner now. `auto` ticks headlessly; otherwise spawns a tab.
@@ -476,8 +517,8 @@ public struct FlowClient: Sendable {
             let (_, stderr, code) = try Self.run("flow", ["owner", "tick", slug, "--auto"])
             return (stderr, code)
         }
-        let code = try Self.spawnDisclaimed("flow", ["owner", "tick", slug])
-        return ("", code)
+        let (code, output) = try Self.spawnDisclaimed("flow", ["owner", "tick", slug])
+        return (output, code)
     }
 
     /// Pause or resume an owner — safe, no-spawn mutations.

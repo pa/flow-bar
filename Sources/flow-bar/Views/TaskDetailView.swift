@@ -30,10 +30,9 @@ struct TaskDetailView: View {
 
             Spacer()
 
-            // Copy the brief markdown to the clipboard.
-            if let brief = store.taskDetail?.brief,
-               !brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Button(action: { copyBrief(brief) }) {
+            // Copy the whole peek (brief + all updates) to the clipboard.
+            if let d = store.taskDetail, !d.clipboardText.isEmpty {
+                Button(action: { copyBrief(d.clipboardText) }) {
                     HStack(spacing: 4) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 13))
@@ -44,7 +43,7 @@ struct TaskDetailView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Copy the brief to the clipboard")
+                .help("Copy the brief + updates to the clipboard")
             }
 
             // Done/archived tasks have nothing to switch to — no Open action.

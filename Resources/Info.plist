@@ -24,5 +24,7 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>flow-bar controls your terminal (iTerm, Terminal, Warp, or Ghostty) to open and focus the tab for the task you switch to.</string>
 </dict>
 </plist>

@@ -207,6 +207,15 @@ T.equal(upTitle, "released and open sourced", "update title humanised")
 let (nonDate, _) = FlowClient.splitUpdateName("notes.md")
 T.equal(nonDate, "notes", "non-dated update falls back to base name")
 
+let detail = TaskDetail(
+    slug: "flow-bar", name: "Build flow-bar", status: "in-progress", brief: "## What\nA menubar app.",
+    updates: [TaskUpdate(filename: "2026-07-01-shipped.md", date: "2026-07-01", title: "shipped", content: "Released v1.")])
+let clip = detail.clipboardText
+T.expect(clip.contains("# Build flow-bar"), "clipboard has title")
+T.expect(clip.contains("A menubar app."), "clipboard has brief")
+T.expect(clip.contains("### 2026-07-01 — shipped"), "clipboard has update header")
+T.expect(clip.contains("Released v1."), "clipboard has update body")
+
 // MARK: - Dashboard metrics
 
 print("Metrics")
