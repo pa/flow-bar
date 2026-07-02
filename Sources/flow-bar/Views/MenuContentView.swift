@@ -256,10 +256,49 @@ struct MenuContentView: View {
 
             Spacer()
 
+            updateOrVersion
+
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.plain).font(.system(size: 14)).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
+    }
+
+    /// Footer trailing item: the current version, or an Update button when a
+    /// newer release is available (or a retry on failure).
+    @ViewBuilder
+    private var updateOrVersion: some View {
+        switch store.updateStatus {
+        case .installing:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.small)
+                Text("Updating…").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+        case .failed(let msg):
+            Button { store.installUpdate() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("Update failed — retry")
+                }
+                .font(.system(size: 12)).foregroundStyle(.red)
+            }
+            .buttonStyle(.plain).help(msg)
+        case .idle:
+            if let up = store.availableUpdate {
+                Button { store.installUpdate() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle.fill").font(.system(size: 12))
+                        Text("Update to v\(up.version)").font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain).help("Download and install v\(up.version)")
+            } else {
+                Text("v\(store.currentVersion)")
+                    .font(.system(size: 12)).foregroundStyle(.tertiary)
+                    .help("flow-bar \(store.currentVersion)")
+            }
+        }
     }
 
     // MARK: Behavior

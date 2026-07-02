@@ -131,6 +131,16 @@ T.equal(tags.first?.count, 36, "tag count")
 T.equal(tags.last?.tag, "owner:granola-intake", "kv tag")
 T.expect(FlowClient.parseTags("TAG COUNT").isEmpty, "tags header skipped")
 
+// MARK: - Version compare
+
+print("Version")
+T.expect(isVersion("0.1.10", newerThan: "0.1.9"), "0.1.10 > 0.1.9 (numeric, not lexical)")
+T.expect(isVersion("v0.2.0", newerThan: "0.1.9"), "leading v tolerated")
+T.expect(!isVersion("0.1.9", newerThan: "0.1.9"), "equal is not newer")
+T.expect(!isVersion("0.1.8", newerThan: "0.1.9"), "older is not newer")
+T.expect(isVersion("1.0.0", newerThan: "0.9.9"), "major bump")
+T.expect(!isVersion("0.1.9-beta", newerThan: "0.1.9"), "pre-release suffix ignored → not newer")
+
 // MARK: - Archived decode
 
 print("Archived")

@@ -59,6 +59,14 @@ final class Store: ObservableObject {
     /// navigation to the In-progress tab without recreating the view.
     @Published var openNonce = 0
 
+    // In-app updates (see Updater.swift).
+    let currentVersion = Updater.currentVersion
+    /// Set when a newer release exists; drives the footer "Update" affordance.
+    @Published var availableUpdate: Updater.Release?
+    enum UpdateStatus: Equatable { case idle, installing, failed(String) }
+    @Published var updateStatus: UpdateStatus = .idle
+    private var lastUpdateCheck: Date?
+
     /// Transient outcome of the last fire-and-forget action (switch / run),
     /// shown briefly on the menubar icon so completion isn't ambiguous.
     enum OpResult: Equatable { case success, failure, alreadyOpen }
@@ -91,6 +99,7 @@ final class Store: ObservableObject {
     func beginActiveRefresh(interval: TimeInterval = 60) {
         refresh()
         refreshMetrics()
+        checkForUpdate()
         activeRefreshTask?.cancel()
         activeRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -116,6 +125,26 @@ final class Store: ObservableObject {
         browseTasks = []
         playbooks = []
         runs = []
+    }
+
+    /// Check GitHub for a newer release (throttled to once/hour unless forced).
+    func checkForUpdate(force: Bool = false) {
+        if !force, let last = lastUpdateCheck, Date().timeIntervalSince(last) < 3600 { return }
+        lastUpdateCheck = Date()
+        Task {
+            guard let latest = await Updater.fetchLatest() else { return }
+            self.availableUpdate = isVersion(latest.version, newerThan: Updater.currentVersion) ? latest : nil
+        }
+    }
+
+    /// Download + install the available update (app relaunches on success).
+    func installUpdate() {
+        guard let rel = availableUpdate, updateStatus != .installing else { return }
+        updateStatus = .installing
+        Task {
+            do { try await Updater.install(rel) }        // success → app quits & relaunches
+            catch { self.updateStatus = .failed("\(error)") }
+        }
     }
 
     /// Open the brief peek for a task and load its brief + recent updates.

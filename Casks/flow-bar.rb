@@ -9,6 +9,11 @@ cask "flow-bar" do
 
   depends_on macos: :ventura # macOS 13+ (minimum)
 
+  # flow-bar updates itself in-app (checks GitHub Releases, downloads + swaps
+  # the bundle), so Homebrew installs it once and leaves version bumps to the
+  # app rather than fighting the self-updater.
+  auto_updates true
+
   app "flow-bar.app"
 
   caveats <<~EOS
