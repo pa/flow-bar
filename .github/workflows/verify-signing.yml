@@ -55,3 +55,15 @@ jobs:
             exit 1
           fi
           echo "OK — signed with the persistent cert; DR is stable across versions."
+
+      - name: Build + verify DMG is a real, mountable disk image
+        run: |
+          ./build-dmg.sh
+          echo "== file type ==" ; file flow-bar.dmg
+          echo "== hdiutil verify ==" ; hdiutil verify flow-bar.dmg
+          MP=$(hdiutil attach flow-bar.dmg -nobrowse -readonly | grep -o '/Volumes/.*' | head -1)
+          echo "mounted at: $MP" ; ls -la "$MP"
+          test -d "$MP/flow-bar.app" || { echo "::error::no flow-bar.app in DMG"; hdiutil detach "$MP"; exit 1; }
+          test -L "$MP/Applications" || echo "::warning::no /Applications drag-target"
+          hdiutil detach "$MP" >/dev/null
+          echo "OK — DMG mounts and contains the app."

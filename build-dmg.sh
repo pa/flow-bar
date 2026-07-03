@@ -16,9 +16,10 @@ cp -R "${APP}" "${STAGE}/"
 ln -s /Applications "${STAGE}/Applications"
 
 rm -f "${DMG}"
-# makehybrid builds the image directly from the folder tree (no attach cycle),
-# which is more robust across environments than `hdiutil create -srcfolder`.
-hdiutil makehybrid -hfs -hfs-volume-name "flow-bar" -o "${DMG}" "${STAGE}" >/dev/null
+# Standard compressed UDIF disk image (what Finder mounts on double-click).
+# NOTE: `makehybrid` produces an optical-disc hybrid that Finder won't mount as
+# a normal .dmg, so we must use `create -format UDZO` here.
+hdiutil create -volname "flow-bar" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}" >/dev/null
 rm -rf "$(dirname "${STAGE}")"
 
 echo "==> built ${PWD}/${DMG}"
