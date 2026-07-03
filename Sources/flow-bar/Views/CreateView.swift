@@ -106,10 +106,7 @@ struct CreateView: View {
                     if isNewProject { newProjectFields }
 
                     labeled("Priority") {
-                        Picker("", selection: $priority) {
-                            Text("High").tag("high"); Text("Medium").tag("medium"); Text("Low").tag("low")
-                        }
-                        .pickerStyle(.segmented).labelsHidden()
+                        prioritySegments
                     }
                     labeled("Tags", hint: "tap to toggle, or add your own") {
                         tagsPicker
@@ -271,6 +268,27 @@ struct CreateView: View {
             .sorted()
             .prefix(6)
             .map { dir + "/" + $0 }
+    }
+
+    /// Custom segmented control (explicit Theme colors) — the native
+    /// Picker(.segmented) renders differently across macOS SDKs (CI vs local),
+    /// so we hardcode colors, exactly like the Tasks status tabs.
+    private var prioritySegments: some View {
+        HStack(spacing: 2) {
+            ForEach([("High", "high"), ("Medium", "medium"), ("Low", "low")], id: \.1) { label, value in
+                Button { priority = value } label: {
+                    Text(label)
+                        .font(.system(size: 12, weight: priority == value ? .semibold : .regular))
+                        .frame(maxWidth: .infinity).padding(.vertical, 5)
+                        .foregroundStyle(priority == value ? Color.white : Color(.sRGB, white: 0.62, opacity: 1))
+                        .background(priority == value ? Theme.accent : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3).background(Theme.track).clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func toggleTag(_ t: String) {
