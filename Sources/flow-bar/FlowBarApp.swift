@@ -7,9 +7,10 @@ struct FlowBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        // No real window — the menubar status item (managed in AppDelegate)
-        // is the whole UI. Settings scene keeps SwiftUI happy.
-        Settings { EmptyView() }
+        // The menubar status item (managed in AppDelegate) is the main UI. The
+        // Settings scene IS our real settings window — opened by ⌘, and by the
+        // footer gear (via showSettingsWindow:), sharing the one Store.
+        Settings { SettingsView(store: .shared) }
     }
 }
 
@@ -19,10 +20,11 @@ struct FlowBarApp: App {
 /// background activity (spinner-dim) and completion (✓/⚠) always show.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
-    private let store = Store()
+    private let store = Store.shared
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var cancellable: AnyCancellable?
+    private var settingsWindow: NSWindow?
 
     /// Real animated spinner shown in place of the icon while a terminal-
     /// spawning command runs.
@@ -77,6 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         // Let switchTo() etc. close the popover for an instant-feeling action.
         Store.dismissHandler = { [weak self] in self?.popover.performClose(nil) }
+        // Footer "Settings…" opens the settings window.
+        Store.openSettingsHandler = { [weak self] in self?.openSettings() }
+
+        // Global hotkey (default ⌥⌘F) toggles the popover from anywhere.
+        HotKeyManager.shared.onFire = { [weak self] in self?.togglePopover() }
+        HotKeyManager.shared.register(store.toggleShortcut)
 
         // Re-render the icon on any Store change.
         cancellable = store.objectWillChange.sink { [weak self] _ in
@@ -98,6 +106,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             store.beginActiveRefresh()
             installOutsideClickMonitor()
         }
+    }
+
+    /// Open (or focus) the Settings window. A real NSWindow we own — reliable
+    /// from a menubar-agent context (sendAction to the SwiftUI Settings scene is
+    /// flaky here). ⌘, still opens the SwiftUI Settings scene, which renders the
+    /// same SettingsView bound to the same shared Store.
+    func openSettings() {
+        popover.performClose(nil)
+        if settingsWindow == nil {
+            let host = NSHostingController(rootView: SettingsView(store: store))
+            let w = NSWindow(contentViewController: host)
+            w.title = "flow-bar Settings"
+            w.styleMask = [.titled, .closable]
+            w.isReleasedWhenClosed = false
+            w.appearance = NSAppearance(named: .darkAqua)
+            w.center()
+            settingsWindow = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     private func installOutsideClickMonitor() {

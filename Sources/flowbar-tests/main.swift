@@ -131,6 +131,14 @@ T.equal(tags.first?.count, 36, "tag count")
 T.equal(tags.last?.tag, "owner:granola-intake", "kv tag")
 T.expect(FlowClient.parseTags("TAG COUNT").isEmpty, "tags header skipped")
 
+// MARK: - Slugify
+
+print("Slugify")
+T.equal(slugify("Add OAuth login!"), "add-oauth-login", "lowercased, punctuation stripped")
+T.equal(slugify("Tighten checkout capture timeout on slow networks"), "tighten-checkout-capture-timeout-on-slow", "capped at 6 words")
+T.equal(slugify("PCI audit"), "pci-audit", "simple")
+T.equal(slugify("  spaced   out  "), "spaced-out", "collapses whitespace")
+
 // MARK: - Version compare
 
 print("Version")

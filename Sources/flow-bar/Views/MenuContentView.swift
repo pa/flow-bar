@@ -3,7 +3,7 @@ import SwiftUI
 
 /// App sections, shown as the left icon rail.
 enum Section: String, CaseIterable, Identifiable {
-    case dashboard, tasks, inbox, playbooks, projects, owners
+    case dashboard, tasks, inbox, playbooks, projects, owners, tags
     var id: String { rawValue }
 
     var title: String {
@@ -14,6 +14,7 @@ enum Section: String, CaseIterable, Identifiable {
         case .playbooks: return "Playbooks"
         case .projects: return "Projects"
         case .owners: return "Owners"
+        case .tags: return "Tags"
         }
     }
 
@@ -25,13 +26,14 @@ enum Section: String, CaseIterable, Identifiable {
         case .playbooks: return "play.rectangle"
         case .projects: return "folder"
         case .owners: return "gearshape.2"
+        case .tags: return "number"
         }
     }
 
     /// Sections whose content is a searchable list.
     var isSearchable: Bool {
         switch self {
-        case .tasks, .projects, .playbooks, .owners: return true
+        case .tasks, .projects, .playbooks, .owners, .tags: return true
         default: return false
         }
     }
@@ -41,6 +43,7 @@ enum Section: String, CaseIterable, Identifiable {
 enum NavTarget {
     case section(Section)
     case tasks(TaskFilter)
+    case tag(String)
 }
 
 /// Popover root: icon rail + content pane (header with global search, the
@@ -80,7 +83,7 @@ struct MenuContentView: View {
     /// Reset navigation to the In-progress tab and refresh — run on every
     /// popover open (the view is reused, so this is signalled via openNonce).
     private func prepareForOpen() {
-        store.closePeek()
+        store.closePeek(); store.cancelCreate()
         section = .tasks
         taskFilter = .inProgress
         query = ""
@@ -95,7 +98,7 @@ struct MenuContentView: View {
         VStack(spacing: 4) {
             ForEach(Section.allCases) { s in
                 Button {
-                    store.closePeek()
+                    store.closePeek(); store.cancelCreate()
                     section = s
                     onSectionChange(s)
                 } label: {
@@ -132,7 +135,10 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var pane: some View {
-        if let slug = store.peekedSlug {
+        if store.isCreating {
+            // Task intake takes over the whole content pane (its own header).
+            CreateView(store: store)
+        } else if let slug = store.peekedSlug {
             // Brief peek takes over the whole content pane (its own header).
             TaskDetailView(store: store, slug: slug)
         } else {
@@ -158,6 +164,7 @@ struct MenuContentView: View {
         case .projects:  ProjectsView(store: store, query: query)
         case .playbooks: PlaybooksView(store: store, query: query)
         case .owners:    OwnersView(store: store, query: query)
+        case .tags:      TagsView(store: store, query: query)
         }
     }
 
@@ -182,6 +189,8 @@ struct MenuContentView: View {
             Text(countLabel).font(.system(size: 14)).foregroundStyle(.secondary)
             Spacer()
             if isActiveLoading { ProgressView().controlSize(.small) }
+            Button(action: { store.beginCreate() }) { Image(systemName: "plus").font(.system(size: 15, weight: .medium)) }
+                .buttonStyle(.plain).help("New task")
             Button(action: refreshActive) { Image(systemName: "arrow.clockwise").font(.system(size: 15)) }
                 .buttonStyle(.plain).help("Refresh")
         }
@@ -207,6 +216,11 @@ struct MenuContentView: View {
         .padding(.horizontal, 10).padding(.bottom, 6)
     }
 
+    /// Label for the terminal footer control — the picked backend, or a prompt.
+    private var currentTerminalLabel: String {
+        Self.terminalOptions.first { $0.value == store.terminalBackend }?.label ?? "Terminal"
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
             Menu {
@@ -230,21 +244,6 @@ struct MenuContentView: View {
                         store.removeActiveProfile()
                     }
                 }
-                Divider()
-                Menu("Terminal") {
-                    ForEach(Self.terminalOptions, id: \.value) { opt in
-                        Button {
-                            store.terminalBackend = opt.value
-                        } label: {
-                            if store.terminalBackend == opt.value {
-                                Label(opt.label, systemImage: "checkmark")
-                            } else {
-                                Text(opt.label)
-                            }
-                        }
-                    }
-                }
-                Toggle("Monochrome icon", isOn: $store.monochromeIcon)
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "externaldrive").font(.system(size: 13))
@@ -254,9 +253,36 @@ struct MenuContentView: View {
             .menuStyle(.borderlessButton).fixedSize()
             .help("Switch flow root")
 
+            // Terminal backend picker — its own footer control, next to the root.
+            Menu {
+                ForEach(Self.terminalOptions, id: \.value) { opt in
+                    Button {
+                        store.terminalBackend = opt.value
+                    } label: {
+                        if store.terminalBackend == opt.value {
+                            Label(opt.label, systemImage: "checkmark")
+                        } else {
+                            Text(opt.label)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal").font(.system(size: 13))
+                    Text(currentTerminalLabel).font(.system(size: 13))
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .help("Terminal backend — where tasks open")
+
             Spacer()
 
             updateOrVersion
+
+            Button(action: { Store.openSettings() }) {
+                Image(systemName: "gearshape").font(.system(size: 14))
+            }
+            .buttonStyle(.plain).foregroundStyle(.secondary).help("Settings")
 
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.plain).font(.system(size: 14)).foregroundStyle(.secondary)
@@ -318,13 +344,16 @@ struct MenuContentView: View {
             taskFilter = f
             section = .tasks
             if f == .inProgress { store.refresh() } else { store.loadBrowse(status: f.status) }
+        case .tag(let t):
+            store.pendingTagDrill = t   // TagsView opens pre-drilled into this tag
+            jump(to: .tags)
         }
     }
 
     private func onSectionChange(_ s: Section) {
         query = ""
         switch s {
-        case .dashboard, .inbox, .playbooks, .projects, .owners: store.refreshMetrics()
+        case .dashboard, .inbox, .playbooks, .projects, .owners, .tags: store.refreshMetrics()
         case .tasks:
             store.refresh()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }

@@ -363,6 +363,58 @@ public struct FlowClient: Sendable {
                           brief: brief, updates: updates)
     }
 
+    // MARK: Create (task / project intake)
+
+    /// Create a task via `flow add task`, then write its brief. Returns the slug.
+    @discardableResult
+    public func createTask(name: String, slug: String, project: String?, workDir: String?,
+                           priority: String, due: String?, tags: [String],
+                           mkdir: Bool, brief: String) throws -> String {
+        var args = ["add", "task", name, "--slug", slug, "--priority", priority]
+        if let project, !project.isEmpty { args += ["--project", project] }
+        // Expand ~ ourselves — flow (Go) doesn't, so a raw "~/…" becomes "/~/…".
+        if let workDir, !workDir.isEmpty {
+            args += ["--work-dir", (workDir as NSString).expandingTildeInPath]
+        }
+        if let due, !due.isEmpty { args += ["--due", due] }
+        for t in tags {
+            let tt = t.trimmingCharacters(in: .whitespaces)
+            if !tt.isEmpty { args += ["--tag", tt] }
+        }
+        if mkdir { args += ["--mkdir"] }
+        let (_, err, code) = try Self.run("flow", args)
+        guard code == 0 else {
+            throw FlowClientError.commandFailed(command: "flow add task \(slug)", code: code, stderr: err)
+        }
+        writeBrief(brief, entity: "task", slug: slug)
+        return slug
+    }
+
+    /// Create a project via `flow add project`, then write its brief.
+    @discardableResult
+    public func createProject(name: String, slug: String, workDir: String,
+                              priority: String, mkdir: Bool, brief: String) throws -> String {
+        let absWorkDir = (workDir as NSString).expandingTildeInPath   // flow doesn't expand ~
+        var args = ["add", "project", name, "--work-dir", absWorkDir, "--slug", slug, "--priority", priority]
+        if mkdir { args += ["--mkdir"] }
+        let (_, err, code) = try Self.run("flow", args)
+        guard code == 0 else {
+            throw FlowClientError.commandFailed(command: "flow add project \(slug)", code: code, stderr: err)
+        }
+        writeBrief(brief, entity: "project", slug: slug)
+        return slug
+    }
+
+    /// Write brief markdown to the file `flow show <entity> <slug>` reports.
+    private func writeBrief(_ brief: String, entity: String, slug: String) {
+        let b = brief.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !b.isEmpty,
+              let (data, _, code) = try? Self.run("flow", ["show", entity, slug]), code == 0,
+              let path = Self.parseShowPaths(String(data: data, encoding: .utf8) ?? "").brief
+        else { return }
+        try? (b + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
     /// Parse `flow show task` text for the fields we surface. Pure &
     /// unit-testable. Top-level `key: value` lines set the section; indented
     /// `- <path>` lines belong to the current section (so `updates:` items are

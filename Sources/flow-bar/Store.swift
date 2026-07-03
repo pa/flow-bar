@@ -1,6 +1,7 @@
 import AppKit
 import FlowBarCore
 import Foundation
+import ServiceManagement
 
 /// Observable view-model backing the menubar UI. macOS 13 compatible
 /// (ObservableObject, not the macOS 14 @Observable macro).
@@ -9,6 +10,10 @@ import Foundation
 /// detached task and publish results back on the main actor.
 @MainActor
 final class Store: ObservableObject {
+    /// Shared instance used by both the AppDelegate and the SwiftUI Settings
+    /// scene, so ⌘, and the footer gear open the same populated settings.
+    static let shared = Store()
+
     @Published var tasks: [FlowTask] = []
     @Published var lastUpdated: Date?
     @Published var errorText: String?
@@ -30,6 +35,29 @@ final class Store: ObservableObject {
     /// Menubar icon style preference, persisted across launches.
     @Published var monochromeIcon: Bool = UserDefaults.standard.bool(forKey: "monochromeIcon") {
         didSet { UserDefaults.standard.set(monochromeIcon, forKey: "monochromeIcon") }
+    }
+
+    /// The global toggle shortcut; persisted, and re-registered on change.
+    @Published var toggleShortcut: Shortcut = .load() {
+        didSet {
+            toggleShortcut.save()
+            HotKeyManager.shared.register(toggleShortcut)
+        }
+    }
+
+    /// Start flow-bar at login (SMAppService, macOS 13+). Reflects the live
+    /// system state; toggling registers/unregisters the login item.
+    @Published var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled) {
+        didSet {
+            guard launchAtLogin != oldValue else { return }
+            do {
+                if launchAtLogin { try SMAppService.mainApp.register() }
+                else { try SMAppService.mainApp.unregister() }
+            } catch {
+                // Revert the toggle if the system rejected it.
+                launchAtLogin = oldValue
+            }
+        }
     }
 
     /// Preferred flow terminal backend (FLOW_TERM); "" = let flow auto-detect.
@@ -120,6 +148,8 @@ final class Store: ObservableObject {
         metrics = nil
         stats = nil
         closePeek()
+        cancelCreate()
+        tagTasks = []
         projectTasks = []
         ownerTasks = []
         browseTasks = []
@@ -168,6 +198,84 @@ final class Store: ObservableObject {
         peekedSlug = nil
         taskDetail = nil
         taskDetailLoading = false
+    }
+
+    // MARK: Create (task intake)
+
+    @Published var isCreating = false
+    @Published var creatingBusy = false
+    @Published var createError: String?
+    /// Existing slugs (incl. archived) so the form can block duplicates — slug
+    /// is flow's primary key. Loaded when the create form opens.
+    @Published var existingTaskSlugs: Set<String> = []
+    @Published var existingProjectSlugs: Set<String> = []
+    /// Projects available to attach a task to (for the picker).
+    @Published var pickerProjects: [Project] = []
+    /// Existing tag names (excludes auto-managed owner:* tags) for the picker.
+    @Published var pickerTags: [String] = []
+
+    /// Open the create form and load existing slugs/projects/tags.
+    func beginCreate() {
+        createError = nil
+        creatingBusy = false
+        isCreating = true
+        Task {
+            let loaded = await Task.detached(priority: .userInitiated) { () -> ([String], [Project], [String]) in
+                let c = FlowClient()
+                let slugs = ((try? c.listTasks(includeArchived: true)) ?? []).map(\.slug)
+                let projects = (try? c.listProjects()) ?? []
+                let tags = ((try? c.listTags()) ?? []).map(\.tag).filter { !$0.hasPrefix("owner:") }
+                return (slugs, projects, tags)
+            }.value
+            self.existingTaskSlugs = Set(loaded.0)
+            self.pickerProjects = loaded.1
+            self.existingProjectSlugs = Set(loaded.1.map(\.slug))
+            self.pickerTags = loaded.2
+        }
+    }
+
+    func cancelCreate() {
+        isCreating = false
+        creatingBusy = false
+        createError = nil
+    }
+
+    /// Create a task (optionally creating a new project first — flow requires
+    /// `--project` to already exist). On success, close the form and refresh.
+    func createTask(name: String, slug: String,
+                    existingProject: String?,
+                    newProject: (name: String, slug: String, workDir: String, mkdir: Bool)?,
+                    priority: String, tags: [String], due: String,
+                    workDir: String, mkdir: Bool, brief: String) {
+        creatingBusy = true
+        createError = nil
+        Task {
+            do {
+                // Resolve the project slug, creating the project first if new.
+                let projectSlug: String? = try await Task.detached(priority: .userInitiated) { () -> String? in
+                    let c = FlowClient()
+                    if let np = newProject {
+                        _ = try c.createProject(name: np.name, slug: np.slug, workDir: np.workDir,
+                                                priority: "medium", mkdir: np.mkdir, brief: "")
+                        return np.slug
+                    }
+                    return existingProject
+                }.value
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try FlowClient().createTask(
+                        name: name, slug: slug, project: projectSlug,
+                        workDir: workDir.isEmpty ? nil : workDir, priority: priority,
+                        due: due.isEmpty ? nil : due, tags: tags, mkdir: mkdir, brief: brief)
+                }.value
+                self.creatingBusy = false
+                self.isCreating = false
+                self.refresh()
+                self.refreshMetrics()
+            } catch {
+                self.creatingBusy = false
+                self.createError = String(describing: error)
+            }
+        }
     }
 
     /// Reload the in-progress task list.
@@ -275,6 +383,25 @@ final class Store: ObservableObject {
                 self.spawningOps -= 1
                 self.flashResult((res?.code ?? 1) == 0 ? .success : .failure)
             }
+        }
+    }
+
+    // Tasks for a drilled-into tag (Tags section).
+    @Published var tagTasks: [FlowTask] = []
+    @Published var tagTasksLoading = false
+    /// Set by a dashboard top-tag tap so the Tags section opens pre-drilled.
+    @Published var pendingTagDrill: String?
+
+    /// Load all tasks carrying a given tag (any status) for the Tags drill-in.
+    func loadTagTasks(_ tag: String) {
+        tagTasksLoading = true
+        tagTasks = []
+        Task {
+            let r = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listTasks(tag: tag)
+            }.value) ?? []
+            self.tagTasks = r
+            self.tagTasksLoading = false
         }
     }
 
@@ -390,5 +517,11 @@ final class Store: ObservableObject {
     static var dismissHandler: (() -> Void)?
     static func dismissPopover() {
         dismissHandler?()
+    }
+
+    /// Open the Settings window. The AppDelegate registers the actual opener.
+    static var openSettingsHandler: (() -> Void)?
+    static func openSettings() {
+        openSettingsHandler?()
     }
 }

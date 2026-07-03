@@ -10,6 +10,8 @@ struct TaskRow: View {
     /// Show a colored status pill (used where a list mixes statuses, e.g. the
     /// Projects drill-in). Off in the In-progress list, where it's redundant.
     var showStatus: Bool = false
+    /// Show the project name. Off in the Projects drill-in (redundant there).
+    var showProject: Bool = true
 
     private var isDone: Bool { task.status == "done" }
     /// Done or archived tasks have nothing to switch to — `flow do` on them is a
@@ -60,16 +62,19 @@ struct TaskRow: View {
                         if showStatus {
                             StatusPill(status: task.status)
                         }
-                        if let project = task.projectName, !showStatus {
-                            Text(project)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                        if let project = task.projectName, showProject {
+                            // Folder glyph so the project reads as a project, not
+                            // a hash-less tag sitting next to the #tags.
+                            HStack(spacing: 3) {
+                                Image(systemName: "folder").font(.system(size: 10))
+                                Text(project).font(.system(size: 13)).lineLimit(1)
+                            }
+                            .foregroundStyle(.secondary)
                         }
                         if !task.tagList.isEmpty {
                             Text(task.tagList.map { "#\($0)" }.joined(separator: " "))
                                 .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
                     }

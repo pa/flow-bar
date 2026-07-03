@@ -62,12 +62,20 @@ struct DashboardView: View {
 
                 if !m.topTags.isEmpty {
                     groupLabel("Top tags")
-                    FlowWrap(m.topTags) { t in
-                        Text("#\(t.tag) \(t.count)")
-                            .font(.system(size: 13))
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(Theme.chip)
-                            .clipShape(Capsule())
+                    FlowLayout(spacing: 6, lineSpacing: 6) {
+                        ForEach(m.topTags) { t in
+                            Button { onNavigate(.tag(t.tag)) } label: {
+                                HStack(spacing: 5) {
+                                    Text("#\(t.tag)").font(.system(size: 12))
+                                    Text("\(t.count)").font(.system(size: 11)).foregroundStyle(.tertiary)
+                                }
+                                .lineLimit(1).fixedSize()
+                                .padding(.horizontal, 9).padding(.vertical, 4)
+                                .background(Theme.chip)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }
@@ -100,10 +108,13 @@ struct DashboardView: View {
             Divider().opacity(0.4)
 
             // Supporting stats.
-            FlowWrap(memoryStats(s)) { stat in
-                HStack(spacing: 4) {
-                    Text(stat.value).font(.system(size: 14, weight: .semibold))
-                    Text(stat.label).font(.system(size: 13)).foregroundStyle(.secondary)
+            FlowLayout(spacing: 10, lineSpacing: 6) {
+                ForEach(memoryStats(s)) { stat in
+                    HStack(spacing: 4) {
+                        Text(stat.value).font(.system(size: 14, weight: .semibold))
+                        Text(stat.label).font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    .lineLimit(1).fixedSize()
                 }
             }
         }
@@ -162,20 +173,4 @@ struct LabeledStat: Identifiable {
     let value: String
     let label: String
     var id: String { label }
-}
-
-/// Minimal wrapping layout for tag chips (macOS 13 compatible).
-struct FlowWrap<Item: Identifiable, Content: View>: View {
-    let items: [Item]
-    let content: (Item) -> Content
-    init(_ items: [Item], @ViewBuilder content: @escaping (Item) -> Content) {
-        self.items = items; self.content = content
-    }
-    var body: some View {
-        // Simple two-per-row grid; good enough for up to 8 tags.
-        let cols = [GridItem(.adaptive(minimum: 80), spacing: 6)]
-        LazyVGrid(columns: cols, alignment: .leading, spacing: 6) {
-            ForEach(items) { content($0) }
-        }
-    }
 }

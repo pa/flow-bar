@@ -32,8 +32,19 @@ see what's in flight and switch between tasks without leaving the menubar.
 - **Playbooks** — run status and recent runs; open a run in the terminal or
   trigger a new run (new tab or background).
 - **Owners** — status + next tick, parked questions, and safe pause/resume.
-- **Flow roots** — switch between multiple `FLOW_ROOT`s (personal, work,
-  a demo) from the footer.
+- **Create tasks & projects** — a `+` intake form with slug suggestions,
+  duplicate + format validation, a searchable tag picker, and work-dir
+  autocomplete; creates a new project inline if needed.
+- **Tags** — browse every tag with counts and drill into a tag's tasks.
+- **Brief peek** — read a task's brief + recent updates inline, and copy them —
+  without switching to it.
+- **Flow roots & terminal** — switch between multiple `FLOW_ROOT`s (personal,
+  work, a demo) and choose the terminal backend (zellij / iTerm2 / Terminal.app
+  / Warp / Ghostty) from the footer.
+- **Global hotkey** — toggle flow-bar from anywhere (default ⌥⌘F, configurable
+  in Settings).
+- **Settings & self-update** — a Settings window for the hotkey, launch-at-login,
+  and icon style; flow-bar updates itself from GitHub Releases (no re-download).
 - **Live activity** — the menubar icon shows a spinner while a `flow do` /
   `flow run` is opening, then a ✓ / ⚠ on completion.
 - **Lightweight** — no background polling; refreshes only while open, and
@@ -70,16 +81,20 @@ swift run flowbar-tests     # run the unit tests
 
 ## Usage
 
-Click the menubar **w**:
+Click the menubar **w** (or press your global hotkey — default **⌥⌘F**):
 
 - **In progress** is the home tab — search and press Enter to switch.
-- The left rail switches sections (Overview, Needs you, Playbooks, Projects,
-  Owners).
-- The footer shows the active **flow root** — use **Add Flow Root…** to point
-  flow-bar at another `~/.flow`-style directory and switch between them.
+- The left rail switches sections: Overview, Needs you, Playbooks, Projects,
+  Owners, Tags.
+- **＋** in the header opens the intake form to create a task (or a new project).
+- The footer switches the active **flow root** and **terminal backend**, and the
+  ⚙︎ gear opens **Settings** (hotkey, launch-at-login, icon, updates).
 
-The first time you switch to a task, macOS asks for **Accessibility**
-permission (flow's terminal backend needs it to open the tab) — a one-time grant.
+Opening a task runs `flow do`, which opens or focuses its session in your chosen
+terminal. **zellij** needs no macOS permission; the AppleScript terminals
+(**iTerm / Terminal / Warp / Ghostty**) ask once for **Automation** (Terminal
+also **Accessibility**). Since the app is signed but not yet notarized, first
+launch needs a one-time Gatekeeper unblock (right-click → Open, or `xattr`).
 
 ## Architecture
 
@@ -92,6 +107,23 @@ directly, so it stays schema-proof and respects flow's invariants.
   hosting the menubar UI.
 
 See [CLAUDE.md](CLAUDE.md) for build details and conventions.
+
+## Roadmap
+
+Planned inline task actions — all **safe** (they update flow directly, no
+terminal spawn), surfaced as per-row / brief-peek actions:
+
+- [ ] **Done** — mark a task done (`flow done`)
+- [ ] **Archive / Unarchive** — from any list and the Archived tab
+- [ ] **Priority** — change high / medium / low
+- [ ] **Waiting on** — set/clear the `waiting_on` note (feeds the Needs-you inbox)
+- [ ] **Due date** — set/clear a due date
+- [ ] **Assignee** — set/clear the assignee
+- [ ] **Tags** — add/remove tags on an existing task
+- [ ] **Edit brief** — edit `brief.md` inline in the peek
+
+Not planned: anything that would reimplement flow's session/spawn logic — flow-bar
+delegates all of that to the `flow` CLI.
 
 ## Contributing
 
