@@ -11,5 +11,6 @@
 # Demo/test flow root (seeded data for recording)
 demo-flow-root/
 
-# Release artifact
+# Release artifacts
 *.zip
+*.dmg
