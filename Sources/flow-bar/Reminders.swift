@@ -45,20 +45,23 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// Ask for alert/sound permission the first time; report denial otherwise.
-    func requestAuthorizationIfNeeded() {
-        guard let center else { return }
+    ///
+    /// `nonisolated` on purpose: `getNotificationSettings` invokes its handler
+    /// on a background queue, so this closure must NOT inherit the type's
+    /// @MainActor isolation (that would trip a runtime executor assertion and
+    /// crash). We only hop back to the main actor to touch `onAuthDenied`.
+    nonisolated func requestAuthorizationIfNeeded() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
-            switch settings.authorizationStatus {
-            case .notDetermined:
-                // Use a fresh `.current()` rather than capturing the outer
-                // (non-Sendable) `center` in this @Sendable completion.
+            let status = settings.authorizationStatus
+            if status == .notDetermined {
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
                     Task { @MainActor in self.onAuthDenied?(!granted) }
                 }
-            case .denied:
-                Task { @MainActor in self.onAuthDenied?(true) }
-            default:
-                Task { @MainActor in self.onAuthDenied?(false) }
+            } else {
+                let denied = (status == .denied)
+                Task { @MainActor in self.onAuthDenied?(denied) }
             }
         }
     }
