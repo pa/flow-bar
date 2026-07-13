@@ -114,6 +114,8 @@ final class Store: ObservableObject {
 
     init() {
         loadProfiles()
+        loadReminders()
+        wireReminderScheduler()
         // No background polling — refreshing only happens while the popover
         // is open (see beginActiveRefresh).
     }
@@ -155,6 +157,7 @@ final class Store: ObservableObject {
         browseTasks = []
         playbooks = []
         runs = []
+        reminderLinkTasks = []
     }
 
     /// Check GitHub for a newer release (throttled to once/hour unless forced).
@@ -511,6 +514,179 @@ final class Store: ObservableObject {
         return s.contains("--force") || s.contains("already running")
             || s.contains("running session") || s.contains("already open")
     }
+
+    // MARK: Reminders (local notifications)
+
+    private static let remindersKey = "reminders"
+
+    /// User-set reminders (standalone or task-linked), persisted across
+    /// launches. Not cleared by endActiveRefresh — these are durable state,
+    /// not fetched data.
+    @Published var reminders: [Reminder] = []
+    /// A reminder to focus when the Reminders section opens — set by a
+    /// notification tap (mirrors `pendingTagDrill`), consumed on open.
+    @Published var pendingReminderID: UUID?
+    /// Seed for the compose form — set by the header ＋ or a task's "Remind me"
+    /// bell; RemindersView opens the form pre-filled and clears it.
+    @Published var pendingReminderDraft: ReminderDraft?
+    /// True when the system has denied notification permission, so the UI can
+    /// prompt the user to enable it.
+    @Published var notificationsDenied = false
+
+    /// Prefill for the reminder compose form.
+    struct ReminderDraft: Equatable, Identifiable {
+        let id = UUID()
+        var title: String
+        var note: String
+        var fireDate: Date
+        var tasks: [LinkedTask] = []
+    }
+
+    /// Default first-nudge time: this evening, or +1h if that's already past.
+    private func defaultReminderDate() -> Date {
+        let evening = ReminderPreset.thisEvening.date(from: Date()) ?? Date().addingTimeInterval(3600)
+        return evening > Date() ? evening : Date().addingTimeInterval(3600)
+    }
+
+    /// Open the compose form for a standalone reminder.
+    func beginReminderBlank() {
+        pendingReminderDraft = ReminderDraft(
+            title: "", note: "", fireDate: defaultReminderDate(), tasks: [])
+    }
+
+    /// Open the compose form pre-linked to a task (from the row/peek bell).
+    /// Defaults the time to the task's due date (09:00) when it has one.
+    func beginReminder(slug: String, name: String, dueInDays: Int? = nil) {
+        var when = defaultReminderDate()
+        if let d = dueInDays,
+           let day = Calendar.current.date(byAdding: .day, value: d, to: Date()),
+           let at9 = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: day),
+           at9 > Date() {
+            when = at9
+        }
+        let display = name.isEmpty ? slug : name
+        pendingReminderDraft = ReminderDraft(
+            title: display, note: "", fireDate: when,
+            tasks: [LinkedTask(slug: slug, name: display, profileID: activeProfileID)])
+    }
+
+    func beginReminder(for task: FlowTask) {
+        beginReminder(slug: task.slug, name: task.name, dueInDays: task.dueInDays)
+    }
+
+    /// Schedules/handles the actual local notifications (app-layer, OS-bound).
+    let reminderScheduler = ReminderScheduler()
+
+    /// Tasks a reminder can be linked to — in-progress + backlog (the
+    /// actionable ones). Loaded when the Reminders section/compose opens.
+    @Published var reminderLinkTasks: [FlowTask] = []
+
+    func loadReminderLinkTasks() {
+        Task {
+            let all = (try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().listTasks(status: nil)   // all non-archived
+            }.value) ?? []
+            self.reminderLinkTasks = all
+                .filter { $0.status == "in-progress" || $0.status == "backlog" }
+                .sorted { a, b in
+                    let ra = a.status == "in-progress" ? 0 : 1
+                    let rb = b.status == "in-progress" ? 0 : 1
+                    return ra != rb ? ra < rb : a.slug < b.slug
+                }
+        }
+    }
+
+    private func loadReminders() {
+        if let data = UserDefaults.standard.data(forKey: Self.remindersKey) {
+            reminders = ReminderStore.decode(data)
+        }
+    }
+
+    private func persistReminders() {
+        if let data = ReminderStore.encode(reminders) {
+            UserDefaults.standard.set(data, forKey: Self.remindersKey)
+        }
+    }
+
+    /// Route notification taps/actions from the scheduler back into the app.
+    private func wireReminderScheduler() {
+        reminderScheduler.onOpen = { id in
+            Store.openReminderHandler?(id)   // show popover focused on this reminder
+        }
+        reminderScheduler.onSnooze = { [weak self] id in
+            self?.snoozeReminder(id: id, by: 3600)
+        }
+        reminderScheduler.onComplete = { [weak self] id in
+            self?.completeReminder(id: id)
+        }
+        reminderScheduler.onAuthDenied = { [weak self] denied in
+            self?.notificationsDenied = denied
+        }
+    }
+
+    /// Re-register the login prompt + re-sync scheduled notifications. Called
+    /// on launch by the AppDelegate.
+    func reconcileReminders() {
+        reminderScheduler.reconcile(reminders)
+    }
+
+    func addReminder(_ r: Reminder) {
+        reminders.append(r)
+        persistReminders()
+        reminderScheduler.requestAuthorizationIfNeeded()
+        reminderScheduler.reconcile(reminders)
+    }
+
+    func updateReminder(_ r: Reminder) {
+        guard let i = reminders.firstIndex(where: { $0.id == r.id }) else { return }
+        reminders[i] = r
+        persistReminders()
+        reminderScheduler.reconcile(reminders)
+    }
+
+    func completeReminder(id: UUID) {
+        guard let i = reminders.firstIndex(where: { $0.id == id }) else { return }
+        reminders[i].completedAt = Date()
+        persistReminders()
+        reminderScheduler.reconcile(reminders)
+    }
+
+    func uncompleteReminder(id: UUID) {
+        guard let i = reminders.firstIndex(where: { $0.id == id }) else { return }
+        reminders[i].completedAt = nil
+        persistReminders()
+        reminderScheduler.reconcile(reminders)
+    }
+
+    func deleteReminder(id: UUID) {
+        reminders.removeAll { $0.id == id }
+        persistReminders()
+        reminderScheduler.reconcile(reminders)
+    }
+
+    /// Push a reminder's fire time out by `seconds` from now (used by the
+    /// notification "Snooze" action and the in-app snooze menu).
+    func snoozeReminder(id: UUID, by seconds: TimeInterval) {
+        guard let i = reminders.firstIndex(where: { $0.id == id }) else { return }
+        reminders[i].fireDate = Date().addingTimeInterval(seconds)
+        reminders[i].completedAt = nil
+        persistReminders()
+        reminderScheduler.reconcile(reminders)
+    }
+
+    /// Explicit user action from the Reminders view: open a linked task,
+    /// switching flow root first if it lives under a different profile.
+    func openLinkedTask(_ t: LinkedTask) {
+        if let pid = t.profileID, pid != activeProfileID,
+           profiles.contains(where: { $0.id == pid }) {
+            setActiveProfile(pid)
+        }
+        switchTo(t.slug)
+    }
+
+    /// The AppDelegate registers this to show the popover focused on a
+    /// reminder when a notification is tapped from a closed state.
+    static var openReminderHandler: ((UUID) -> Void)?
 
     /// Close the menubar popover so an action feels instant. The AppDelegate
     /// registers a handler that performs the actual NSPopover close.

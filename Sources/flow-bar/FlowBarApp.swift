@@ -82,6 +82,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Footer "Settings…" opens the settings window.
         Store.openSettingsHandler = { [weak self] in self?.openSettings() }
 
+        // Local reminder notifications: register the delegate + Snooze/Complete
+        // actions, ask for permission, and re-sync the schedule with any saved
+        // reminders. A tap opens the popover focused on that reminder.
+        store.reminderScheduler.configure()
+        store.reminderScheduler.requestAuthorizationIfNeeded()
+        store.reconcileReminders()
+        Store.openReminderHandler = { [weak self] id in
+            self?.store.pendingReminderID = id
+            self?.showPopoverForReminder()
+        }
+
         // Global hotkey (default ⌥⌘F) toggles the popover from anywhere.
         HotKeyManager.shared.onFire = { [weak self] in self?.togglePopover() }
         HotKeyManager.shared.register(store.toggleShortcut)
@@ -106,6 +117,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             store.beginActiveRefresh()
             installOutsideClickMonitor()
         }
+    }
+
+    /// Show the popover (without toggling it closed) and bump `openNonce` so
+    /// MenuContentView re-runs `prepareForOpen`, which honors `pendingReminderID`
+    /// and lands on the Reminders section. Used by a notification tap.
+    private func showPopoverForReminder() {
+        guard let button = statusItem.button else { return }
+        store.openNonce += 1
+        if !popover.isShown {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            installOutsideClickMonitor()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
+        store.beginActiveRefresh()
     }
 
     /// Open (or focus) the Settings window. A real NSWindow we own — reliable

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// App sections, shown as the left icon rail.
 enum Section: String, CaseIterable, Identifiable {
-    case dashboard, tasks, inbox, playbooks, projects, owners, tags
+    case dashboard, tasks, inbox, playbooks, projects, owners, tags, reminders
     var id: String { rawValue }
 
     var title: String {
@@ -15,6 +15,7 @@ enum Section: String, CaseIterable, Identifiable {
         case .projects: return "Projects"
         case .owners: return "Owners"
         case .tags: return "Tags"
+        case .reminders: return "Reminders"
         }
     }
 
@@ -27,6 +28,7 @@ enum Section: String, CaseIterable, Identifiable {
         case .projects: return "folder"
         case .owners: return "gearshape.2"
         case .tags: return "number"
+        case .reminders: return "bell"
         }
     }
 
@@ -78,6 +80,14 @@ struct MenuContentView: View {
         .background(Theme.bg)
         .onAppear { prepareForOpen() }
         .onChange(of: store.openNonce) { _ in prepareForOpen() }
+        // A task's "Remind me" bell seeds a draft while the popover is open —
+        // jump to the Reminders section so its compose form appears.
+        .onChange(of: store.pendingReminderDraft?.id) { id in
+            guard id != nil else { return }
+            store.closePeek(); store.cancelCreate()
+            section = .reminders
+            store.loadReminderLinkTasks()
+        }
     }
 
     /// Reset navigation to the In-progress tab and refresh — run on every
@@ -87,6 +97,12 @@ struct MenuContentView: View {
         section = .tasks
         taskFilter = .inProgress
         query = ""
+        // A notification tap sets pendingReminderID before opening — land on the
+        // Reminders section (focused on that reminder) instead of In-progress.
+        if store.pendingReminderID != nil {
+            section = .reminders
+            store.loadReminderLinkTasks()
+        }
         // Data loading is driven by the AppDelegate (beginActiveRefresh) so it
         // only runs while the popover is open.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
@@ -165,13 +181,23 @@ struct MenuContentView: View {
         case .playbooks: PlaybooksView(store: store, query: query)
         case .owners:    OwnersView(store: store, query: query)
         case .tags:      TagsView(store: store, query: query)
+        case .reminders: RemindersView(store: store)
         }
     }
 
-    /// Red count badge on a rail icon (currently the Needs-you inbox).
+    /// Red count badge on a rail icon: the Needs-you inbox, and due/overdue
+    /// reminders.
     private func railBadge(_ s: Section) -> Int? {
-        guard s == .inbox, let m = store.metrics else { return nil }
-        return m.questionCount + m.overdueCount
+        switch s {
+        case .inbox:
+            guard let m = store.metrics else { return nil }
+            return m.questionCount + m.overdueCount
+        case .reminders:
+            let n = store.reminders.activeBadgeCount()
+            return n > 0 ? n : nil
+        default:
+            return nil
+        }
     }
 
     // MARK: Header / search / footer
@@ -189,8 +215,10 @@ struct MenuContentView: View {
             Text(countLabel).font(.system(size: 14)).foregroundStyle(.secondary)
             Spacer()
             if isActiveLoading { ProgressView().controlSize(.small) }
-            Button(action: { store.beginCreate() }) { Image(systemName: "plus").font(.system(size: 15, weight: .medium)) }
-                .buttonStyle(.plain).help("New task")
+            Button(action: { section == .reminders ? store.beginReminderBlank() : store.beginCreate() }) {
+                Image(systemName: "plus").font(.system(size: 15, weight: .medium))
+            }
+            .buttonStyle(.plain).help(section == .reminders ? "New reminder" : "New task")
             Button(action: refreshActive) { Image(systemName: "arrow.clockwise").font(.system(size: 15)) }
                 .buttonStyle(.plain).help("Refresh")
         }
@@ -354,6 +382,7 @@ struct MenuContentView: View {
         query = ""
         switch s {
         case .dashboard, .inbox, .playbooks, .projects, .owners, .tags: store.refreshMetrics()
+        case .reminders: store.loadReminderLinkTasks()   // populate the link picker
         case .tasks:
             store.refresh()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }

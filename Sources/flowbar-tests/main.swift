@@ -270,4 +270,76 @@ T.equal(m.runsRunning, 1, "runsRunning")
 T.equal(m.runsDone, 1, "runsDone")
 T.equal(m.topTags.count, 8, "topTags capped at 8")
 
+// MARK: - Reminders
+
+print("Reminders")
+
+T.test("reminder codable round-trip") {
+    let r = Reminder(
+        id: UUID(), title: "Ship v2", note: "notes",
+        fireDate: Date(timeIntervalSince1970: 1_900_000_000),
+        createdAt: Date(timeIntervalSince1970: 1_800_000_000),
+        completedAt: nil,
+        tasks: [LinkedTask(slug: "flow-bar", name: "flow bar", profileID: "default"),
+                LinkedTask(slug: "flow", name: "flow", profileID: "default")])
+    let data = ReminderStore.encode([r])!
+    let back = ReminderStore.decode(data)
+    T.equal(back.count, 1, "count")
+    T.equal(back.first?.tasks.count, 2, "two linked tasks survive")
+    T.equal(back.first?.tasks.first?.slug, "flow-bar", "slug survives")
+    T.equal(back.first, r, "equal round trip")
+    T.expect(back.first?.isLinked == true, "isLinked")
+}
+
+do {
+    var comps = DateComponents()
+    comps.year = 2026; comps.month = 7; comps.day = 8
+    comps.hour = 10; comps.minute = 0; comps.second = 0
+    let cal = Calendar.current
+    let now = cal.date(from: comps)!
+
+    T.test("preset inOneHour") {
+        let d = ReminderPreset.inOneHour.date(from: now)!
+        T.equal(d.timeIntervalSince(now), 3600, "one hour later")
+    }
+    T.test("preset thisEvening = 18:00 same day") {
+        let d = ReminderPreset.thisEvening.date(from: now, calendar: cal)!
+        let c = cal.dateComponents([.day, .hour, .minute], from: d)
+        T.equal(c.hour, 18, "evening hour"); T.equal(c.day, 8, "same day")
+    }
+    T.test("preset tomorrowMorning = next day 09:00") {
+        let d = ReminderPreset.tomorrowMorning.date(from: now, calendar: cal)!
+        let c = cal.dateComponents([.day, .hour], from: d)
+        T.equal(c.hour, 9, "morning hour"); T.equal(c.day, 9, "next day")
+    }
+    T.test("custom preset has no date") {
+        T.expect(ReminderPreset.custom.date(from: now) == nil, "custom is picker-driven")
+    }
+}
+
+T.test("reminder grouping buckets") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    let cal = Calendar.current
+    let overdue = Reminder(title: "o", fireDate: now.addingTimeInterval(-3600))
+    let soon = Reminder(title: "t", fireDate: now.addingTimeInterval(1800))
+    let later = Reminder(title: "u", fireDate: now.addingTimeInterval(8 * 24 * 3600))
+    var done = Reminder(title: "d", fireDate: now.addingTimeInterval(-7200))
+    done.completedAt = now
+    let g = [later, overdue, done, soon].group(now: now, calendar: cal)
+    T.equal(g.overdue.count, 1, "one overdue")
+    T.equal(g.completed.count, 1, "one completed")
+    T.equal(g.today.count + g.upcoming.count, 2, "two pending non-overdue")
+    T.expect(overdue.isOverdue(now), "overdue flag")
+    T.expect(!soon.isOverdue(now), "future not overdue")
+}
+
+T.test("reminders sort by fire time") {
+    let base = Date(timeIntervalSince1970: 1_900_000_000)
+    let a = Reminder(title: "a", fireDate: base.addingTimeInterval(300))
+    let b = Reminder(title: "b", fireDate: base.addingTimeInterval(100))
+    let c = Reminder(title: "c", fireDate: base.addingTimeInterval(200))
+    let sorted = [a, b, c].sortedByFire()
+    T.equal(sorted.map(\.title), ["b", "c", "a"], "earliest first")
+}
+
 T.summarize()

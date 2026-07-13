@@ -89,7 +89,8 @@ struct TagsView: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(store.tagTasks.sortedByStatusThenPriority()) { t in
                             TaskRow(task: t, action: { store.switchTo(t.slug) },
-                                    onPeek: { store.peekBrief(t.slug) }, showStatus: true)
+                                    onPeek: { store.peekBrief(t.slug) },
+                                    onRemind: { store.beginReminder(for: t) }, showStatus: true)
                         }
                     }
                     .padding(.vertical, 4)

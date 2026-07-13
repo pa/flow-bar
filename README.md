@@ -38,6 +38,9 @@ see what's in flight and switch between tasks without leaving the menubar.
 - **Tags** — browse every tag with counts and drill into a tag's tasks.
 - **Brief peek** — read a task's brief + recent updates inline, and copy them —
   without switching to it.
+- **Reminders** — set a reminder (standalone, or linked to one or more tasks)
+  and get a native macOS notification at the time you pick. Tapping it returns
+  you to the reminder in flow-bar, where linked tasks are one click to open.
 - **Flow roots & terminal** — switch between multiple `FLOW_ROOT`s (personal,
   work, a demo) and choose the terminal backend (zellij / iTerm2 / Terminal.app
   / Warp / Ghostty) from the footer.
@@ -85,7 +88,7 @@ Click the menubar **w** (or press your global hotkey — default **⌥⌘F**):
 
 - **In progress** is the home tab — search and press Enter to switch.
 - The left rail switches sections: Overview, Needs you, Playbooks, Projects,
-  Owners, Tags.
+  Owners, Tags, Reminders.
 - **＋** in the header opens the intake form to create a task (or a new project).
 - The footer switches the active **flow root** and **terminal backend**, and the
   ⚙︎ gear opens **Settings** (hotkey, launch-at-login, icon, updates).

@@ -113,11 +113,11 @@ struct OwnersView: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         if !questions.isEmpty {
                             sectionLabel("Questions for you", questions.count)
-                            ForEach(questions) { t in TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }) }
+                            ForEach(questions) { t in TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, onRemind: { store.beginReminder(for: t) }) }
                         }
                         if !others.isEmpty {
                             sectionLabel("Managed tasks", others.count)
-                            ForEach(others) { t in TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }) }
+                            ForEach(others) { t in TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, onRemind: { store.beginReminder(for: t) }) }
                         }
                     }
                     .padding(.vertical, 4)

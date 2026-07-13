@@ -108,7 +108,7 @@ struct ProjectsView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) {
                             ForEach(tasks) { t in
-                                TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, showStatus: true, showProject: false)
+                                TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, onRemind: { store.beginReminder(for: t) }, showStatus: true, showProject: false)
                             }
                         }
                         .padding(.vertical, 4)

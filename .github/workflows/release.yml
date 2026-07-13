@@ -94,10 +94,22 @@ jobs:
           git commit -m "cask: ${GITHUB_REF_NAME} (${SHA})" || echo "no cask change"
           git push origin HEAD:main || echo "push skipped"
 
+      # Publish the top (latest) CHANGELOG.md section as the release notes.
+      - name: Extract changelog notes
+        id: notes
+        run: |
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          awk '/^## /{c++} c==1{print} c==2{exit}' CHANGELOG.md > "$NOTES"
+          if [ ! -s "$NOTES" ]; then echo "no changelog section found" ; fi
+          echo "path=$NOTES" >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             flow-bar.dmg
             flow-bar.zip
+          # Curated changelog section, with the auto-generated commit/PR list
+          # appended underneath.
+          body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true

@@ -133,6 +133,7 @@ struct TasksView: View {
                 ForEach(filtered) { task in
                     TaskRow(task: task, action: { store.switchTo(task.slug) },
                             onPeek: { store.peekBrief(task.slug) },
+                            onRemind: { store.beginReminder(for: task) },
                             showStatus: filter == .all || filter == .archived)
                 }
             }

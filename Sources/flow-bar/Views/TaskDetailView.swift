@@ -46,6 +46,21 @@ struct TaskDetailView: View {
                 .help("Copy the brief + updates to the clipboard")
             }
 
+            // Remind me about this task — opens the reminder compose form
+            // pre-linked to it.
+            if let d = store.taskDetail {
+                Button(action: { store.beginReminder(slug: d.slug, name: d.name) }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bell").font(.system(size: 13))
+                        Text("Remind").font(.system(size: 13))
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Remind me about this task")
+            }
+
             // Done/archived tasks have nothing to switch to — no Open action.
             if store.taskDetail?.canOpen == true {
                 Button(action: { store.switchTo(slug) }) {

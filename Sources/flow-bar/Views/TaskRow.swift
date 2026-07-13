@@ -7,6 +7,8 @@ struct TaskRow: View {
     let action: () -> Void
     /// Optional "view brief" affordance; when set, a doc button is shown.
     var onPeek: (() -> Void)? = nil
+    /// Optional "remind me" affordance; when set, a bell button is shown.
+    var onRemind: (() -> Void)? = nil
     /// Show a colored status pill (used where a list mixes statuses, e.g. the
     /// Projects drill-in). Off in the In-progress list, where it's redundant.
     var showStatus: Bool = false
@@ -34,6 +36,17 @@ struct TaskRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("View brief")
+            }
+            if let onRemind {
+                Button(action: onRemind) {
+                    Image(systemName: "bell")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Remind me about this task")
             }
         }
         .padding(.trailing, 4)

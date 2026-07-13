@@ -37,15 +37,15 @@ struct InboxView: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         groupHeader("Questions for you", m.questions.count, "questionmark.bubble", .orange)
                         ForEach(m.questions.sortedByPriority()) { t in
-                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) })
+                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, onRemind: { store.beginReminder(for: t) })
                         }
                         groupHeader("Overdue", overdue.count, "calendar.badge.exclamationmark", .red)
                         ForEach(overdue) { t in
-                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) })
+                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, onRemind: { store.beginReminder(for: t) })
                         }
                         groupHeader("Waiting on", waiting.count, "hourglass", .secondary)
                         ForEach(waiting) { t in
-                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) })
+                            TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, onRemind: { store.beginReminder(for: t) })
                         }
                     }
                     .padding(.vertical, 4)
