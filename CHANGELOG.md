@@ -3,6 +3,14 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.2.1 — 2026-07-13
+
+### Fixed
+
+- Launch crash on the notarized/release build: the notification-permission
+  check ran its completion on a background queue while inheriting main-actor
+  isolation, tripping a Swift concurrency assertion. (v0.2.0 crashed on start.)
+
 ## v0.2.0 — 2026-07-09
 
 ### Added
