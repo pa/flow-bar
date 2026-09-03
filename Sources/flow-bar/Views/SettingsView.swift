@@ -34,7 +34,9 @@ struct SettingsView: View {
                         Text("v\(store.currentVersion)")
                             .font(.system(size: 13)).foregroundStyle(.secondary)
                     }
+                    installRow
                     updateRow
+                    protectionRow
                     HStack(spacing: 16) {
                         Link("GitHub", destination: URL(string: "https://github.com/pa/flow-bar")!)
                         Link("Website", destination: URL(string: "https://pa.github.io/flow-bar")!)
@@ -59,13 +61,88 @@ struct SettingsView: View {
             Button("Update failed — retry") { store.installUpdate() }
                 .font(.system(size: 12)).foregroundStyle(.red).help(msg)
         case .idle:
-            if let up = store.availableUpdate {
+            if let up = store.availableUpdate, store.isManagedInstall {
+                // Homebrew owns this install — self-installing a CI-built zip
+                // would replace the natively-compiled binary. Hand over the
+                // command instead, selectable so it can be copied by hand too.
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("v\(up.version) is available")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.accent)
+                    HStack(spacing: 8) {
+                        Text(Updater.upgradeCommand)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .foregroundStyle(.secondary)
+                        Button("Copy") { store.copyToPasteboard(Updater.upgradeCommand) }
+                            .font(.system(size: 11)).buttonStyle(.link)
+                    }
+                }
+            } else if let up = store.availableUpdate {
                 Button("Update to v\(up.version)") { store.installUpdate() }
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.accent)
             } else {
                 Button("Check for updates") { store.checkForUpdate(force: true) }
                     .font(.system(size: 12)).buttonStyle(.link)
             }
+        }
+    }
+
+    /// How this build got here and what SDK it was compiled against. The SDK is
+    /// what decides the UI's appearance, so a stale one is worth surfacing.
+    @ViewBuilder
+    private var installRow: some View {
+        if let sdk = AppInfo.buildSDK {
+            HStack(alignment: .top) {
+                Text("Built for").font(.system(size: 13))
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("macOS \(sdk) SDK")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                    if store.needsSDKRebuild {
+                        Button("Rebuild natively") { store.copyToPasteboard(Updater.rebuildCommand) }
+                            .font(.system(size: 11)).buttonStyle(.link)
+                            .help("Copy “\(Updater.rebuildCommand)”")
+                    }
+                }
+            }
+            if store.needsSDKRebuild {
+                hint("You're on macOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion) "
+                     + "but this build was compiled against the macOS \(sdk) SDK, so the UI renders in "
+                     + "compatibility mode. Rebuilding links it against your current SDK.")
+            }
+        }
+    }
+
+    /// Whether the stable signing identity is in place. Without it, macOS drops
+    /// the Automation grant on every upgrade and `flow do` starts failing
+    /// silently — worth being able to see and fix.
+    @ViewBuilder
+    private var protectionRow: some View {
+        HStack {
+            Text("Update protection").font(.system(size: 13))
+            Spacer()
+            if SelfSign.isProtected {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.shield.fill").font(.system(size: 11))
+                    Text("On").font(.system(size: 13))
+                }
+                .foregroundStyle(.green)
+            } else {
+                HStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.shield").font(.system(size: 11))
+                        Text("Off").font(.system(size: 13))
+                    }
+                    .foregroundStyle(.orange)
+                    Button("Fix") { SelfSign.bootstrap() }
+                        .font(.system(size: 11)).buttonStyle(.link)
+                }
+            }
+        }
+        if !SelfSign.isProtected {
+            hint("flow-bar isn't signed with a stable identity, so macOS will ask you to "
+                 + "re-allow terminal control after each update. “Fix” creates a local "
+                 + "signing certificate and relaunches.")
         }
     }
 

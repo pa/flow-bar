@@ -6,18 +6,33 @@ import Foundation
 /// bundle, and relaunches. No brew, no Gatekeeper prompt (an in-app URLSession
 /// download isn't quarantined), and — because every release shares one signing
 /// identity — no permission re-grant.
+///
+/// **Self-installing is refused on Homebrew source installs.** Those bundles are
+/// compiled on the user's machine specifically so they link against that
+/// machine's macOS SDK; swapping in a CI-built zip would silently undo that and
+/// put the UI back into compatibility mode. On that channel we still *check* for
+/// a new version — we just tell the user to run `brew upgrade` instead.
 enum Updater {
     static let latestAPI = "https://api.github.com/repos/pa/flow-bar/releases/latest"
-    /// The app is signed with this identity in CI; we refuse to install anything
-    /// that isn't (tamper / wrong-source guard, our stand-in for notarization).
+    /// Release builds are signed with this identity in CI; we refuse to install
+    /// anything that isn't (tamper / wrong-source guard, our stand-in for
+    /// notarization). Only ever consulted on the `github-release` channel —
+    /// source installs never reach the install path at all.
     static let expectedAuthority = "flow-bar-signing"
+
+    /// Homebrew owns updates for source installs; see the type comment.
+    static var isManagedInstall: Bool { AppInfo.isManagedInstall }
+
+    /// The command a managed install should run instead of self-updating.
+    static let upgradeCommand = "brew upgrade --cask flow-bar"
+
+    /// The command to rebuild against a newer macOS SDK after an OS upgrade.
+    static let rebuildCommand = "brew reinstall --cask flow-bar"
 
     struct Release: Sendable { let version: String; let zipURL: URL }
 
     /// The running app's version (CFBundleShortVersionString), stamped at build.
-    static var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-    }
+    static var currentVersion: String { AppInfo.version }
 
     /// Fetch the latest release (version + flow-bar.zip asset URL) from GitHub.
     static func fetchLatest() async -> Release? {
@@ -39,7 +54,7 @@ enum Updater {
     }
 
     enum InstallError: Error, CustomStringConvertible {
-        case download, unzip, missingApp, signature, notWritable
+        case download, unzip, missingApp, signature, notWritable, managedExternally
         var description: String {
             switch self {
             case .download:   return "download failed"
@@ -47,6 +62,7 @@ enum Updater {
             case .missingApp: return "update archive had no app"
             case .signature:  return "update isn’t signed by flow-bar — refused"
             case .notWritable: return "can’t write to \(Bundle.main.bundlePath) — move flow-bar to /Applications"
+            case .managedExternally: return "installed by Homebrew — run `\(upgradeCommand)`"
             }
         }
     }
@@ -54,6 +70,10 @@ enum Updater {
     /// Download → unzip → verify signature → swap bundle → relaunch. On success
     /// the app quits (a detached helper swaps + reopens it); throws otherwise.
     static func install(_ release: Release) async throws {
+        // Belt and braces: no code path may swap the bundle on a brew-managed
+        // install, even if a UI affordance slips through.
+        guard !isManagedInstall else { throw InstallError.managedExternally }
+
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("flow-bar-update-\(UUID().uuidString)")
         try? fm.createDirectory(at: work, withIntermediateDirectories: true)

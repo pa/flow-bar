@@ -7,20 +7,25 @@ covers Overview, Needs-you, Playbooks, Projects, and Owners.
 
 ## Build & run
 
-The host has the **Swift toolchain via Command Line Tools only — no full
-Xcode** (`xcodebuild` is unavailable). Everything is driven by SwiftPM.
+Everything is driven by SwiftPM — there is no Xcode project. The host does now
+have full Xcode, but **keep the build Command-Line-Tools-compatible**: the
+Homebrew cask compiles on the user's machine, and requiring a ~10 GB Xcode
+download to install a menubar app is not acceptable.
 
 ```sh
 swift build                 # debug build of all targets
 swift run flowbar-tests     # unit tests (exits non-zero on failure)
 swift run flowbar-smoke     # prints decoded in-progress tasks (data-path check)
 ./build-app.sh              # assemble flow-bar.app (release + ad-hoc sign)
+./build-app.sh --sign-local # ...signed with the stable per-machine identity
 ./build-app.sh --run        # ...and launch it
 ```
 
-**Tests:** `XCTest`/`swift-testing` aren't available with Command Line Tools
-(they need full Xcode), so unit tests are a plain executable harness
-(`Sources/flowbar-tests`, see `T` in `Harness.swift`) covering the pure
+**Tests:** unit tests are a plain executable harness rather than XCTest, so they
+run for anyone building from source with Command Line Tools only. (Full Xcode is
+present on this host now, so XCTest *would* work here — don't "fix" the harness
+on that basis; it exists for the source-install path.) The harness lives in
+`Sources/flowbar-tests` (see `T` in `Harness.swift`) and covers the pure
 `FlowBarCore` logic: model decoding, `filtered`/`sorted` helpers, the
 owners/tags text parsers, and `DashboardMetrics`. Run `swift run flowbar-tests`.
 
@@ -43,10 +48,17 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
     find `flow`/`claude`), `Process` runner, entity reads (JSON; owners/tags
     via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions.
 - **`flow-bar`** (executable): the SwiftUI app.
-  - `FlowBarApp.swift` — `@main` + `MenuBarExtra` (`.window` style; `.accessory`
-    activation policy / `LSUIElement` = menubar agent, no dock icon).
-  - `Store.swift` — `@MainActor ObservableObject` (macOS 13 compatible, not the
-    macOS 14 `@Observable` macro). Polls the in-progress list every 120s
+  - `FlowBarApp.swift` — an AppKit `NSStatusItem` + `NSPopover` driven from an
+    `AppDelegate` (NOT `MenuBarExtra`, which can't re-render the icon while the
+    popover is closed). Only the `Settings` scene is SwiftUI-App-level.
+    `.accessory` activation policy / `LSUIElement` = menubar agent, no dock icon.
+  - `AppInfo.swift` — build-time provenance (`FBInstallChannel`, `FBBuildSDK`)
+    stamped into Info.plist; decides whether the updater may self-install and
+    whether the UI is running SDK-behind.
+  - `SelfSign.swift` — keeps the code identity stable so the TCC Automation
+    grant survives upgrades. See "Distribution" below.
+  - `Store.swift` — `@MainActor ObservableObject` (deliberately not the
+    `@Observable` macro — see Gotchas). Polls the in-progress list every 120s
     (instant on open + after switch); metrics/playbooks/owner-tasks load on
     demand. `refreshMetrics` runs its reads concurrently. Switching dismisses
     the popover immediately and runs `flow do` fire-and-forget.
@@ -71,16 +83,56 @@ the spawn (hand-rolling a resume can't focus a specific existing tab).
 
 ## Gotchas
 
-- macOS 13+ only (`MenuBarExtra`). Keep `Store` on `ObservableObject` (not
-  `@Observable`) to preserve the v13 floor.
-- The app bundle is **ad-hoc signed**; on first run you may need
-  `xattr -d com.apple.quarantine flow-bar.app`. Signing/notarization is a
-  later concern.
+- **macOS 15+.** The floor is set by the source-install path: Swift 6
+  (`swift-tools-version:6.0`) ships only in Xcode/CLT 16+, which need macOS
+  14.5+ — so a macOS 13 user cannot compile this at all. `ContentUnavailableView`
+  and `.onKeyPress` are therefore available without `#available` gating. Keep
+  `Store` on `ObservableObject` (not `@Observable`) anyway: it's one
+  `@MainActor` object shared everywhere and converting it is a large, risky
+  refactor with no user-visible benefit.
+- **Signing is load-bearing, not a later concern.** `FlowClient.spawnDisclaimed`
+  deliberately does *not* disclaim responsibility for the AppleScript terminal
+  backends, so flow-bar itself owns the TCC Automation grant — and TCC keys that
+  grant to the bundle's Designated Requirement. An ad-hoc signature's DR is the
+  code hash, so it changes every build and the grant is dropped on every
+  upgrade (`flow do` then fails with -1743, silently). Source installs get a
+  per-machine self-signed identity (`scripts/create-signing-cert.sh`, mirrored
+  in `SelfSign.certScript`); CI release builds get `flow-bar-signing`. The cert
+  does **not** need to be a trusted root — trust is required to *validate* a
+  signature, not to produce one.
 - `flow owner list` and `flow list tags` are **text, not JSON** — parsed by
   `FlowClient.listOwners`/`listTags`. If their output format changes, update
   those parsers.
 - The flow binary lives at `~/.local/bin/flow`; `FlowClient.searchPATH` lists
   the dirs we probe.
+
+## Distribution
+
+**The Homebrew cask compiles from source on the user's machine. Never add a
+bottle or a prebuilt payload to the brew path.** SwiftUI picks its appearance
+from the macOS SDK a binary was *linked against*, not the OS it runs on, so a
+CI-built binary renders in compatibility mode on any newer macOS — forever.
+Building locally is the entire point.
+
+- `build-app.sh` is the **single build entry point** for CI, brew, and local
+  dev. Keep logic there, not in the cask: `installer script:` is an escape
+  hatch Homebrew is gradually narrowing, and a thin cask keeps a future move
+  cheap.
+- A **cask**, not a formula: formula installs run in Homebrew's sandbox, which
+  denies reads of `~/Library/Keychains` and writes to `/Applications` — so a
+  formula could neither sign with a stable identity nor install a real `.app`.
+- Cask paths include the tarball's `flow-bar-#{version}/` wrapper. Homebrew only
+  flattens a single extracted child when it is *not* a directory
+  (`UnpackStrategy#extract_nestedly`), so GitHub's wrapper survives staging.
+- `Updater.swift` **refuses to self-install** on the `homebrew-source` channel —
+  swapping in a CI-built zip would undo the native build. It offers
+  `brew upgrade --cask flow-bar` instead.
+- The prebuilt `.dmg`/`.zip` on releases exist only for people who won't install
+  a toolchain, and for the in-app updater that serves them.
+- `.github/workflows/verify-install.yml` asserts the acceptance test: the
+  installed binary's `LC_BUILD_VERSION` sdk major must equal the runner's OS
+  major. If that regresses, the app still works — it just silently stops being
+  native, which is exactly the failure nobody notices.
 
 ## Read-mostly philosophy
 

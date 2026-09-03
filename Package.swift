@@ -4,7 +4,11 @@ import PackageDescription
 let package = Package(
     name: "flow-bar",
     platforms: [
-        .macOS(.v13) // MenuBarExtra requires macOS 13+
+        // macOS 15+: the app is installed by a Homebrew cask that compiles on
+        // the user's machine, and Swift 6 only ships in Xcode/CLT 16+ (macOS
+        // 14.5+). 15 also makes ContentUnavailableView and .onKeyPress
+        // available without #available gating.
+        .macOS(.v15)
     ],
     targets: [
         // Pure data/logic layer — no UI. Testable, importable by the app

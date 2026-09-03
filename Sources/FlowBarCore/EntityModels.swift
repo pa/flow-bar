@@ -63,7 +63,7 @@ public struct Owner: Identifiable, Hashable, Sendable {
 }
 
 /// A tag + its task count from `flow list tags` (text output).
-public struct TagCount: Identifiable, Hashable, Sendable {
+public struct TagCount: Codable, Identifiable, Hashable, Sendable {
     public var tag: String
     public var count: Int
     public var id: String { tag }
@@ -245,5 +245,47 @@ public extension Array where Element == FlowTask {
             if a.priority != b.priority { return prioRank(a.priorityValue) < prioRank(b.priorityValue) }
             return a.slug < b.slug
         }
+    }
+}
+
+/// How the task list is ordered. Lives here (not in the app target) so the list
+/// and the Enter-to-open shortcut can share one definition of "what's visible".
+public enum TaskListSort: String, Sendable, CaseIterable {
+    case priority, statusThenPriority, recentlyUpdated
+}
+
+/// Counts behind the multi-select action bar.
+public struct SelectionSummary: Equatable, Sendable {
+    public let total: Int
+    public let visible: Int
+    /// Checked tasks the current search/filter is hiding. The number that makes
+    /// the feature trustworthy: after re-searching, the user sees no ticked rows
+    /// and needs proof the earlier checks survived.
+    public var hidden: Int { total - visible }
+    public init(total: Int, visible: Int) { self.total = total; self.visible = visible }
+}
+
+public func selectionSummary(selected: Set<String>, visibleSlugs: Set<String>) -> SelectionSummary {
+    SelectionSummary(total: selected.count,
+                     visible: selected.intersection(visibleSlugs).count)
+}
+
+public extension Array where Element == FlowTask {
+    /// The single source of truth for "what the task list shows": filter by
+    /// query, then sort. Used by both the rendered list AND Enter-to-open, so
+    /// the two can never disagree about which task is first.
+    func visible(query: String, sort: TaskListSort) -> [FlowTask] {
+        let f = filtered(by: query)
+        switch sort {
+        case .priority:          return f.sortedByPriority()
+        case .statusThenPriority: return f.sortedByStatusThenPriority()
+        case .recentlyUpdated:   return f.sortedByRecentlyUpdated()
+        }
+    }
+
+    /// The row Enter should open: the first VISIBLE row `flow do` can act on.
+    /// Skipping non-openable rows stops Enter firing a no-op on a done task.
+    func firstOpenable(query: String, sort: TaskListSort) -> FlowTask? {
+        visible(query: query, sort: sort).first(where: \.canOpen)
     }
 }

@@ -87,6 +87,12 @@ public struct FlowTask: Codable, Identifiable, Hashable, Sendable {
     }
     public var isOverdue: Bool { (dueInDays ?? 1) < 0 }
 
+    /// Whether `flow do` has anything to switch to. Done and archived tasks
+    /// don't, so they're click-disabled in TaskRow and un-checkable for a
+    /// multi-open batch — gating at check time gives immediate feedback instead
+    /// of silently dropping items when the batch runs.
+    public var canOpen: Bool { status != "done" && !isArchived }
+
     public init(
         slug: String, name: String, status: String, priority: String,
         project: String? = nil, ageDays: Int? = nil, stale: Bool? = nil,

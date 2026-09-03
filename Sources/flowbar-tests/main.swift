@@ -119,6 +119,27 @@ T.equal(owners.first?.nextTick, "2026-06-30T20:09:18+05:30", "owner nextTick")
 T.equal(owners.first?.nextTickRelative, "in 1h59m0s", "owner relative")
 T.expect(FlowClient.parseOwners("SLUG STATUS EVERY NEXT TICK\n\n").isEmpty, "owners header/blank skipped")
 
+// `flow owner list` has no --format json and prints PROSE when there are no
+// owners. A positional parser turned that into a bogus owner (slug "No",
+// status "owners."), which is what surfaced as a junk row in the Owners view.
+T.expect(FlowClient.parseOwners(
+    #"No owners. Create one with: flow add owner "<name>" --work-dir <path> --every <dur>"#
+).isEmpty, "owners empty-state prose yields no rows")
+
+// The NEXT TICK column can be a bare parenthesised state instead of a
+// timestamp; that must not be mistaken for an ISO date.
+let ownerNoTick = FlowClient.parseOwners("""
+SLUG                 STATUS   EVERY  NEXT TICK
+probe-owner          active   3h     (not started)
+""")
+T.equal(ownerNoTick.count, 1, "owner with no scheduled tick parses")
+T.equal(ownerNoTick.first?.nextTick, nil, "no ISO timestamp when state is parenthesised")
+T.equal(ownerNoTick.first?.nextTickRelative, "not started", "parenthesised state kept as relative")
+T.equal(FlowClient.parseOwners("""
+SLUG                 STATUS   EVERY  NEXT TICK
+probe-owner          paused   3h     (paused)
+""").first?.status, "paused", "paused owner still parses")
+
 let tagText = """
 TAG                    COUNT
 #frammer               36 tasks
@@ -130,6 +151,19 @@ T.equal(tags.first?.tag, "frammer", "tag '#' stripped")
 T.equal(tags.first?.count, 36, "tag count")
 T.equal(tags.last?.tag, "owner:granola-intake", "kv tag")
 T.expect(FlowClient.parseTags("TAG COUNT").isEmpty, "tags header skipped")
+
+// Same class of bug as owners: with nothing tagged, `flow list tags` prints
+// "(no tags in use)", which became a tag named "(no" with count 0.
+T.expect(FlowClient.parseTags("(no tags in use)").isEmpty, "tags empty-state prose yields no rows")
+T.expect(FlowClient.parseTags("#alpha  not-a-number").isEmpty, "non-numeric count rejected")
+
+// listTags prefers `flow list tags --format json`, whose shape is
+// [{"tag": "...", "count": N}] with no leading '#'.
+let tagJSON = Data(#"[{"tag":"alpha","count":2},{"tag":"beta","count":1}]"#.utf8)
+let decodedTags = try! JSONDecoder().decode([TagCount].self, from: tagJSON)
+T.equal(decodedTags.count, 2, "tags decode from flow's json")
+T.equal(decodedTags.first?.tag, "alpha", "json tag name")
+T.equal(decodedTags.first?.count, 2, "json tag count")
 
 // MARK: - Slugify
 
@@ -341,5 +375,121 @@ T.test("reminders sort by fire time") {
     let sorted = [a, b, c].sortedByFire()
     T.equal(sorted.map(\.title), ["b", "c", "a"], "earliest first")
 }
+
+
+// Completing a reminder must move it OUT of its time bucket and into
+// Completed — including the overdue case, which is the one that matters most
+// (an overdue item you've dealt with should stop nagging).
+T.test("completing an overdue reminder moves it to Completed") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var r = Reminder(id: UUID(), title: "pay invoice", note: nil,
+                     fireDate: now.addingTimeInterval(-3600), createdAt: now)
+    let before = [r].group(now: now)
+    T.equal(before.overdue.count, 1, "starts overdue")
+    T.equal(before.completed.count, 0, "not yet completed")
+    T.expect(r.isOverdue(now), "isOverdue before completing")
+
+    r.completedAt = now
+    let after = [r].group(now: now)
+    T.equal(after.overdue.count, 0, "leaves the Overdue bucket")
+    T.equal(after.completed.count, 1, "lands in Completed")
+    T.expect(!r.isOverdue(now), "a completed reminder is never overdue")
+}
+
+T.test("completing clears the rail badge") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var overdue = Reminder(id: UUID(), title: "a", note: nil,
+                           fireDate: now.addingTimeInterval(-60), createdAt: now)
+    var todayItem = Reminder(id: UUID(), title: "b", note: nil,
+                             fireDate: now.addingTimeInterval(60), createdAt: now)
+    T.equal([overdue, todayItem].activeBadgeCount(now: now), 2, "both count toward the badge")
+    overdue.completedAt = now
+    todayItem.completedAt = now
+    T.equal([overdue, todayItem].activeBadgeCount(now: now), 0, "completed items don't badge")
+}
+
+T.test("Completed bucket is newest-completed first") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var older = Reminder(id: UUID(), title: "older", note: nil, fireDate: now, createdAt: now)
+    var newer = Reminder(id: UUID(), title: "newer", note: nil, fireDate: now, createdAt: now)
+    older.completedAt = now.addingTimeInterval(-600)
+    newer.completedAt = now
+    T.equal([older, newer].group(now: now).completed.map(\.title), ["newer", "older"],
+            "most recently completed first")
+}
+
+T.test("un-completing returns a reminder to its time bucket") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var r = Reminder(id: UUID(), title: "back", note: nil,
+                     fireDate: now.addingTimeInterval(-3600), createdAt: now,
+                     completedAt: now)
+    T.equal([r].group(now: now).completed.count, 1, "starts completed")
+    r.completedAt = nil
+    let g = [r].group(now: now)
+    T.equal(g.completed.count, 0, "leaves Completed")
+    T.equal(g.overdue.count, 1, "returns to Overdue")
+}
+
+// MARK: - Multi-select
+
+print("Multi-select")
+
+// canOpen gates which rows get a checkbox. Gating at CHECK time (not open time)
+// means the user gets immediate feedback instead of items silently vanishing
+// from a batch.
+T.expect(task("a", status: "in-progress").canOpen, "in-progress is openable")
+T.expect(task("b", status: "backlog").canOpen, "backlog is openable (matches single-click)")
+T.expect(!task("c", status: "done").canOpen, "done is not openable")
+var archived = task("d", status: "in-progress"); archived.archived = true
+T.expect(!archived.canOpen, "archived is not openable")
+
+// `visible` must compose exactly as the old inline logic did, since the list
+// and Enter-to-open now both route through it.
+let msTasks = [
+    task("low-one",  priority: "low",    updated: "2026-01-03T00:00:00+00:00"),
+    task("high-one", priority: "high",   updated: "2026-01-01T00:00:00+00:00"),
+    task("mid-one",  priority: "medium", updated: "2026-01-02T00:00:00+00:00"),
+]
+T.equal(msTasks.visible(query: "", sort: TaskListSort.priority).map(\.slug),
+        msTasks.filtered(by: "").sortedByPriority().map(\.slug),
+        "visible(.priority) == filtered+sortedByPriority")
+T.equal(msTasks.visible(query: "", sort: TaskListSort.recentlyUpdated).map(\.slug),
+        msTasks.filtered(by: "").sortedByRecentlyUpdated().map(\.slug),
+        "visible(.recentlyUpdated) matches")
+T.equal(msTasks.visible(query: "", sort: TaskListSort.statusThenPriority).map(\.slug),
+        msTasks.filtered(by: "").sortedByStatusThenPriority().map(\.slug),
+        "visible(.statusThenPriority) matches")
+
+// Enter must skip rows flow do can't act on, rather than firing a no-op.
+let withDoneFirst = [
+    task("aaa-done", status: "done", priority: "high"),
+    task("bbb-live", status: "in-progress", priority: "high"),
+]
+T.equal(withDoneFirst.firstOpenable(query: "", sort: TaskListSort.priority)?.slug, "bbb-live",
+        "firstOpenable skips a done first row")
+
+// The pre-existing bug: Enter ignored the search box and opened the global
+// first task instead of the first MATCH.
+T.equal(msTasks.firstOpenable(query: "mid", sort: TaskListSort.priority)?.slug, "mid-one",
+        "firstOpenable respects the query")
+T.equal([task("x", status: "done")].firstOpenable(query: "", sort: TaskListSort.priority)?.slug, nil,
+        "firstOpenable is nil when nothing is openable")
+
+// The action bar's counts. `hidden` is what proves to the user that checks made
+// before they re-searched are still live.
+let sum = selectionSummary(selected: ["a", "b", "c"], visibleSlugs: ["a", "z"])
+T.equal(sum.total, 3, "summary total")
+T.equal(sum.visible, 1, "summary visible")
+T.equal(sum.hidden, 2, "summary hidden by search")
+
+// A checked slug that has left the list entirely (task completed elsewhere,
+// filter changed) still counts and is never silently dropped — the slug is all
+// `flow do` needs.
+let goneSum = selectionSummary(selected: ["vanished"], visibleSlugs: [])
+T.equal(goneSum.total, 1, "unknown slug still counted")
+T.equal(goneSum.hidden, 1, "unknown slug counts as hidden")
+
+// Batch order is deterministic so error text is stable across runs.
+T.equal(Set(["c", "a", "b"]).sorted(), ["a", "b", "c"], "batch order is deterministic")
 
 T.summarize()
