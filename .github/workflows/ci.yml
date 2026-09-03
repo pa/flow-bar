@@ -17,7 +17,7 @@ jobs:
         os: [macos-15, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Select latest Xcode (Swift 6)
         uses: maxim-lobanov/setup-xcode@v1
@@ -43,6 +43,6 @@ jobs:
   cask:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Lint the cask
         run: brew style Casks/flow-bar.rb
