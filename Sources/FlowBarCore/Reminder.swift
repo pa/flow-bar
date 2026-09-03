@@ -147,3 +147,43 @@ public enum ReminderStore {
         return (try? dec.decode([Reminder].self, from: data)) ?? []
     }
 }
+
+/// One row of the rendered reminders list: a bucket heading, or a reminder.
+///
+/// The list used to be four sibling `ForEach` containers (Overdue / Today /
+/// Upcoming / Completed) inside a single `LazyVStack`. That gave the lazy stack
+/// four independent identity spaces over one reused cell pool, so as buckets
+/// filled and emptied the headings drifted away from their rows — future,
+/// uncompleted reminders ended up rendered under "COMPLETED".
+///
+/// Flattening to ONE list with one identity space makes a reminder changing
+/// bucket an ordinary move, which SwiftUI handles correctly. It is also pure,
+/// so the ordering is unit-testable rather than only observable by eye.
+public enum ReminderListItem: Identifiable, Equatable {
+    case header(String)
+    case reminder(Reminder)
+
+    /// A reminder is in exactly one bucket at a time, so its UUID is unique
+    /// across the whole flattened list — which keeps `scrollTo(reminder.id)`
+    /// working for notification focus.
+    public var id: String {
+        switch self {
+        case .header(let label): return "header:\(label)"
+        case .reminder(let r):   return r.id.uuidString
+        }
+    }
+}
+
+public extension ReminderGroups {
+    /// Headings + rows in display order, omitting empty buckets.
+    func flattened() -> [ReminderListItem] {
+        var out: [ReminderListItem] = []
+        for (label, items) in [("Overdue", overdue), ("Today", today),
+                               ("Upcoming", upcoming), ("Completed", completed)] {
+            guard !items.isEmpty else { continue }
+            out.append(.header(label))
+            out.append(contentsOf: items.map(ReminderListItem.reminder))
+        }
+        return out
+    }
+}

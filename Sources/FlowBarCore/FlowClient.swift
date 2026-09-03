@@ -112,7 +112,7 @@ public struct FlowClient: Sendable {
 
     /// Append a line to ~/Library/Logs/flow-bar.log so we can see exactly how
     /// the app invokes flow.
-    static func log(_ message: String) {
+    public static func log(_ message: String) {
         let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
         let dir = NSHomeDirectory() + "/Library/Logs"
         let path = dir + "/flow-bar.log"

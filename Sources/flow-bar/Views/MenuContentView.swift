@@ -85,7 +85,7 @@ struct MenuContentView: View {
         // vibrancy on older SDKs. (See Theme.)
         .background {
             if Theme.isGlass {
-                VisualEffectBackground(material: .popover).ignoresSafeArea()
+                PopoverSurface()
             } else {
                 Theme.bg
             }
@@ -530,9 +530,12 @@ struct MenuContentView: View {
             } else {
                 Button("Clear") { store.clearSelection() }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
+                    .padding(.vertical, 6).contentShape(Rectangle())
                 Button("Open all (\(summary.total))") { openSelected() }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 6).padding(.vertical, 6)
+                    .contentShape(Rectangle())
             }
         }
         .padding(.horizontal, 10)

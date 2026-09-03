@@ -23,6 +23,20 @@ struct SettingsView: View {
                 section("General") {
                     Toggle("Launch at login", isOn: $store.launchAtLogin)
                         .font(.system(size: 13))
+                    if let err = store.launchAtLoginError {
+                        // Previously a refused registration silently reverted the
+                        // switch, which reads as "the toggle is broken".
+                        HStack(alignment: .top, spacing: 5) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10))
+                            Text(err).font(.system(size: 11))
+                        }
+                        .foregroundStyle(.orange)
+                    } else if store.launchAtLogin {
+                        hint("macOS lists flow-bar under System Settings › General › "
+                             + "Login Items, and posts a “Background Items Added” "
+                             + "notification the first time it's registered.")
+                    }
                     Toggle("Monochrome menubar icon", isOn: $store.monochromeIcon)
                         .font(.system(size: 13))
                 }
@@ -48,6 +62,10 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: 440, height: 460)
+        // The toggle's value is captured once at Store init, so re-sync with the
+        // real system state whenever Settings is shown — the user may have
+        // changed it in System Settings, or macOS may have revoked it.
+        .onAppear { store.refreshLaunchAtLogin() }
         .background(Theme.bg)
         .preferredColorScheme(.dark)
     }
@@ -119,19 +137,19 @@ struct SettingsView: View {
     @ViewBuilder
     private var protectionRow: some View {
         HStack {
-            Text("Update protection").font(.system(size: 13))
+            Text("Permissions survive updates").font(.system(size: 13))
             Spacer()
             if SelfSign.isProtected {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.shield.fill").font(.system(size: 11))
-                    Text("On").font(.system(size: 13))
+                    Text("Yes").font(.system(size: 13))
                 }
                 .foregroundStyle(.green)
             } else {
                 HStack(spacing: 8) {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.shield").font(.system(size: 11))
-                        Text("Off").font(.system(size: 13))
+                        Text("No").font(.system(size: 13))
                     }
                     .foregroundStyle(.orange)
                     Button("Fix") { SelfSign.bootstrap() }
@@ -139,10 +157,14 @@ struct SettingsView: View {
                 }
             }
         }
-        if !SelfSign.isProtected {
-            hint("flow-bar isn't signed with a stable identity, so macOS will ask you to "
-                 + "re-allow terminal control after each update. “Fix” creates a local "
-                 + "signing certificate and relaunches.")
+        if SelfSign.isProtected {
+            hint("flow-bar has a stable signature, so macOS keeps your permission to "
+                 + "control the terminal when it updates.")
+        } else {
+            hint("flow-bar's signature changes on every build, so macOS will ask you to "
+                 + "re-allow terminal control after each update — and until you do, "
+                 + "opening a task fails silently. “Fix” gives it a stable signature "
+                 + "and relaunches.")
         }
     }
 

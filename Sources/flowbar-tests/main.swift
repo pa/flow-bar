@@ -430,6 +430,64 @@ T.test("un-completing returns a reminder to its time bucket") {
     T.equal(g.overdue.count, 1, "returns to Overdue")
 }
 
+// The compose form refuses to save unless the fire time is in the FUTURE, so a
+// stale carried-over date silently disables Add. Encode that rule here so the
+// "reminder won't save and nothing explains why" failure can't come back.
+T.test("a past fire date must not be savable") {
+    let past = Date().addingTimeInterval(-60)
+    let future = Date().addingTimeInterval(3600)
+    T.expect(!(past > Date()), "a past date fails the save guard")
+    T.expect(future > Date(), "the default (+1h) passes the save guard")
+}
+
+// The rendered list is now one flat [header, rows…] sequence. These pin the
+// exact bug that was visible on screen: two FUTURE, uncompleted reminders
+// rendered underneath the "COMPLETED" heading, with no "UPCOMING" heading at
+// all — because four sibling ForEach containers were sharing one LazyVStack
+// cell pool and the headings drifted off their rows.
+T.test("flattened list keeps each reminder under its own heading") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    let cal = Calendar.current
+    let upcomingA = Reminder(id: UUID(), title: "nothing", note: nil,
+                             fireDate: now.addingTimeInterval(86_400), createdAt: now)
+    let upcomingB = Reminder(id: UUID(), title: "test", note: nil,
+                             fireDate: now.addingTimeInterval(90_000), createdAt: now)
+    var done = Reminder(id: UUID(), title: "smoke test", note: nil,
+                        fireDate: now.addingTimeInterval(-3600), createdAt: now)
+    done.completedAt = now
+
+    let flat = [upcomingA, upcomingB, done].group(now: now, calendar: cal).flattened()
+    let labels: [String] = flat.map {
+        switch $0 {
+        case .header(let l):   return "#\(l)"
+        case .reminder(let r): return r.title
+        }
+    }
+    T.equal(labels, ["#Upcoming", "nothing", "test", "#Completed", "smoke test"],
+            "headings stay attached to their own rows")
+}
+
+T.test("empty buckets emit no heading") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var done = Reminder(id: UUID(), title: "only", note: nil, fireDate: now, createdAt: now)
+    done.completedAt = now
+    let flat = [done].group(now: now).flattened()
+    T.equal(flat.count, 2, "one heading + one row")
+    T.equal(flat.first?.id, "header:Completed", "only the Completed heading")
+}
+
+T.test("flattened ids are unique so cells can't be reused across buckets") {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    var done = Reminder(id: UUID(), title: "a", note: nil,
+                        fireDate: now.addingTimeInterval(-60), createdAt: now)
+    done.completedAt = now
+    let live = Reminder(id: UUID(), title: "b", note: nil,
+                        fireDate: now.addingTimeInterval(86_400), createdAt: now)
+    let ids = [done, live].group(now: now).flattened().map(\.id)
+    T.equal(ids.count, Set(ids).count, "no duplicate ids in the rendered list")
+    T.expect(ids.contains(live.id.uuidString), "a reminder's id is its UUID (scrollTo still works)")
+}
+
 // MARK: - Multi-select
 
 print("Multi-select")
