@@ -13,7 +13,14 @@ import SwiftUI
 /// desktop/app underneath, which is what makes the popover read as part of the
 /// system rather than a dark rectangle floating on top of it.
 struct VisualEffectBackground: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .popover
+    /// `.hudWindow`, not `.popover`.
+    ///
+    /// `.popover` samples the desktop and goes LIGHT over a light wallpaper.
+    /// This app commits to a dark appearance, so its near-white text then sat on
+    /// a pale surface and became unreadable. `.hudWindow` keeps a dark
+    /// translucent panel whatever is behind it — still glass, still sampling,
+    /// but the contrast floor no longer depends on the user's wallpaper.
+    var material: NSVisualEffectView.Material = .hudWindow
 
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
@@ -104,5 +111,22 @@ extension View {
             self.background(isSelected ? Theme.accent : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         }
+    }
+}
+
+/// The popover's backdrop: real vibrancy plus a dark scrim.
+///
+/// The scrim is what makes the glass safe. Vibrancy alone leaves contrast at the
+/// mercy of whatever is behind the window — over a bright wallpaper the panel
+/// lifts and light text washes out (exactly what happened with `.popover`). A
+/// fixed dark wash under the content guarantees a contrast floor on ANY
+/// backdrop while still letting the blur read through.
+struct PopoverSurface: View {
+    var body: some View {
+        ZStack {
+            VisualEffectBackground(material: .hudWindow)
+            Theme.scrim
+        }
+        .ignoresSafeArea()
     }
 }

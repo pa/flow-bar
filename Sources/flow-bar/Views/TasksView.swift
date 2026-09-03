@@ -63,7 +63,7 @@ struct TasksView: View {
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
-                        .foregroundStyle(filter == f ? Color.white : Color(.sRGB, white: 0.62, opacity: 1))
+                        .foregroundStyle(filter == f ? Color.white : Color(.sRGB, white: 0.75, opacity: 1))
                         .segmentSelection(isSelected: filter == f)
                         .contentShape(RoundedRectangle(cornerRadius: 6))
                 }

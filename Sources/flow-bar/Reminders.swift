@@ -51,12 +51,26 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
     /// @MainActor isolation (that would trip a runtime executor assertion and
     /// crash). We only hop back to the main actor to touch `onAuthDenied`.
     nonisolated func requestAuthorizationIfNeeded() {
-        guard Bundle.main.bundleIdentifier != nil else { return }
+        guard let bundleID = Bundle.main.bundleIdentifier else {
+            FlowClient.log("notifications: no bundle id — scheduler disabled (bare `swift run`?)")
+            return
+        }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             let status = settings.authorizationStatus
+            FlowClient.log("notifications: bundle=\(bundleID) path=\(Bundle.main.bundlePath) "
+                           + "status=\(Self.describe(status))")
             if status == .notDetermined {
-                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+                    // The error used to be discarded, which is why a failure to
+                    // register was completely silent: the app simply never
+                    // appeared in System Settings > Notifications and there was
+                    // nothing anywhere to explain it.
+                    if let error {
+                        FlowClient.log("notifications: requestAuthorization FAILED — \(error)")
+                    } else {
+                        FlowClient.log("notifications: requestAuthorization granted=\(granted)")
+                    }
                     Task { @MainActor in self.onAuthDenied?(!granted) }
                 }
             } else {
@@ -66,12 +80,24 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    nonisolated private static func describe(_ s: UNAuthorizationStatus) -> String {
+        switch s {
+        case .notDetermined: return "notDetermined"
+        case .denied:        return "denied"
+        case .authorized:    return "authorized"
+        case .provisional:   return "provisional"
+        case .ephemeral:     return "ephemeral"
+        @unknown default:    return "unknown(\(s.rawValue))"
+        }
+    }
+
     /// Replace all scheduled notifications with one per pending (incomplete,
     /// future) reminder. Idempotent — safe to call on every change and launch.
     func reconcile(_ reminders: [Reminder]) {
         guard let center else { return }
         center.removeAllPendingNotificationRequests()
         let now = Date()
+        var scheduled = 0
         for r in reminders where !r.isCompleted && r.fireDate > now {
             let content = UNMutableNotificationContent()
             content.title = r.title.isEmpty ? "Reminder" : r.title
@@ -94,8 +120,17 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
             let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
             let request = UNNotificationRequest(
                 identifier: r.id.uuidString, content: content, trigger: trigger)
-            center.add(request)
+            // Capture the id, not the Reminder: Reminder isn't Sendable and
+            // this completion runs off the main actor.
+            let rid = r.id
+            center.add(request) { error in
+                if let error {
+                    FlowClient.log("notifications: add failed for \(rid) — \(error)")
+                }
+            }
+            scheduled += 1
         }
+        FlowClient.log("notifications: reconcile scheduled \(scheduled) of \(reminders.count) reminder(s)")
     }
 
     // MARK: - UNUserNotificationCenterDelegate (called off the main actor)

@@ -14,7 +14,7 @@ struct RemindersView: View {
     @State private var editingID: UUID?
     @State private var title = ""
     @State private var note = ""
-    @State private var fireDate = Date().addingTimeInterval(3600)
+    @State private var fireDate = RemindersView.defaultFireDate()
     @State private var datePickerExpanded = false
     @State private var linkedTasks: [LinkedTask] = []
     @State private var linkPickerOpen = false
@@ -55,11 +55,22 @@ struct RemindersView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
+                        // ONE ForEach over a flattened [header, rows…] list.
+                        // Four sibling ForEach containers sharing a LazyVStack's
+                        // cell pool is what made headings drift from their rows
+                        // (future reminders rendering under "COMPLETED") and made
+                        // a completion tick only appear after a close/reopen.
                         LazyVStack(alignment: .leading, spacing: 2) {
-                            bucket("Overdue", groups.overdue, tint: .red)
-                            bucket("Today", groups.today, tint: Theme.accent)
-                            bucket("Upcoming", groups.upcoming, tint: .secondary)
-                            bucket("Completed", groups.completed, tint: .green)
+                            ForEach(groups.flattened()) { item in
+                                switch item {
+                                case .header(let label):
+                                    bucketHeader(label)
+                                case .reminder(let r):
+                                    row(r)
+                                        .background(focusID == r.id
+                                                    ? Theme.accent.opacity(0.14) : .clear)
+                                }
+                            }
                         }
                         .padding(.vertical, 6)
                     }
@@ -79,18 +90,19 @@ struct RemindersView: View {
         }
     }
 
-    @ViewBuilder
-    private func bucket(_ label: String, _ items: [Reminder], tint: Color) -> some View {
-        if !items.isEmpty {
-            Text(label.uppercased())
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(tint == .secondary ? Color.secondary : tint)
-                .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
-            ForEach(items) { r in
-                row(r)
-                    .id(r.id)
-                    .background(focusID == r.id ? Theme.accent.opacity(0.14) : .clear)
-            }
+    private func bucketHeader(_ label: String) -> some View {
+        Text(label.uppercased())
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(Self.tint(for: label))
+            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
+    }
+
+    private static func tint(for label: String) -> Color {
+        switch label {
+        case "Overdue":   return .red
+        case "Today":     return Theme.accent
+        case "Completed": return .green
+        default:          return .secondary
         }
     }
 
@@ -315,10 +327,21 @@ struct RemindersView: View {
             Button(editingID == nil ? "Add" : "Save") { save() }
                 .buttonStyle(.plain)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(canSave ? Theme.accent : Color.secondary)
+                .foregroundStyle(canSave ? Theme.accent : Color.secondary.opacity(0.5))
                 .disabled(!canSave)
+                .help(saveBlockedReason ?? "")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            // Why Add won't fire, in the form itself. Without this a stale or
+            // past fire time just greys the button out and the app looks broken.
+            if let reason = saveBlockedReason {
+                Text(reason)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .padding(.bottom, -4)
+            }
+        }
     }
 
     private var taskLink: some View {
@@ -487,8 +510,14 @@ struct RemindersView: View {
         .background(Theme.chip).clipShape(Capsule())
     }
 
-    private var canSave: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty && fireDate > Date()
+    private var canSave: Bool { saveBlockedReason == nil }
+
+    /// Why Add is disabled, or nil when it isn't. Surfaced in the form so a
+    /// refusal to save is explained instead of just being a dead grey button.
+    private var saveBlockedReason: String? {
+        if title.trimmingCharacters(in: .whitespaces).isEmpty { return "Give the reminder a title" }
+        if fireDate <= Date() { return "Pick a time in the future" }
+        return nil
     }
 
     // MARK: - Actions
@@ -544,7 +573,14 @@ struct RemindersView: View {
     private func resetFields() {
         title = ""; note = ""; linkedTasks = []
         editingID = nil; linkPickerOpen = false; taskSearch = ""
+        // Must be reset too: `canSave` requires a FUTURE fireDate, so carrying
+        // the previous reminder's time forward silently disables Add once that
+        // time passes — the compose form then looks fine but refuses to save.
+        fireDate = Self.defaultFireDate()
     }
+
+    /// A sensible default that is always in the future.
+    static func defaultFireDate() -> Date { Date().addingTimeInterval(3600) }
 
     // MARK: - Helpers
 

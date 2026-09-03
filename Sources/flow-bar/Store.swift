@@ -49,15 +49,73 @@ final class Store: ObservableObject {
     /// system state; toggling registers/unregisters the login item.
     @Published var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled) {
         didSet {
+            guard !suppressLaunchAtLoginSideEffect else { return }
             guard launchAtLogin != oldValue else { return }
             do {
                 if launchAtLogin { try SMAppService.mainApp.register() }
                 else { try SMAppService.mainApp.unregister() }
+                launchAtLoginError = nil
+                FlowClient.log("launch-at-login: \(launchAtLogin ? "register" : "unregister") ok — "
+                               + "status now \(Self.describe(SMAppService.mainApp.status))")
             } catch {
-                // Revert the toggle if the system rejected it.
+                // Previously this reverted the toggle and said NOTHING, so a
+                // rejected registration looked like the switch simply refusing
+                // to move. Report it instead.
+                FlowClient.log("launch-at-login: \(launchAtLogin ? "register" : "unregister") "
+                               + "FAILED — \(error)")
+                launchAtLoginError = Self.launchAtLoginMessage(for: error)
+                suppressLaunchAtLoginSideEffect = true
                 launchAtLogin = oldValue
+                suppressLaunchAtLoginSideEffect = false
             }
         }
+    }
+
+    /// Set while we're writing the toggle to mirror system state, so the
+    /// observer doesn't turn a read back into a register/unregister call.
+    private var suppressLaunchAtLoginSideEffect = false
+
+    /// Why the last register/unregister failed, or nil. Surfaced in Settings.
+    @Published var launchAtLoginError: String?
+
+    /// Re-read the live system state. The toggle's initial value is captured
+    /// once when the Store is created, so it goes stale if the user changes it
+    /// in System Settings > General > Login Items, or if macOS revokes it.
+    func refreshLaunchAtLogin() {
+        let status = SMAppService.mainApp.status
+        let enabled = (status == .enabled)
+        FlowClient.log("launch-at-login: status=\(Self.describe(status)) "
+                       + "bundle=\(Bundle.main.bundlePath)")
+        if enabled != launchAtLogin {
+            suppressLaunchAtLoginSideEffect = true
+            launchAtLogin = enabled
+            suppressLaunchAtLoginSideEffect = false
+        }
+        // `.requiresApproval` means macOS registered it but the user has it
+        // switched off in System Settings — the app can't override that.
+        launchAtLoginError = (status == .requiresApproval)
+            ? "Turn flow-bar on in System Settings › General › Login Items"
+            : nil
+    }
+
+    nonisolated private static func describe(_ s: SMAppService.Status) -> String {
+        switch s {
+        case .enabled:          return "enabled"
+        case .notRegistered:    return "notRegistered"
+        case .notFound:         return "notFound"
+        case .requiresApproval: return "requiresApproval"
+        @unknown default:       return "unknown(\(s.rawValue))"
+        }
+    }
+
+    nonisolated private static func launchAtLoginMessage(for error: Error) -> String {
+        let ns = error as NSError
+        // Registering from outside /Applications is the usual cause on a dev
+        // build; macOS wants a stable, LaunchServices-registered location.
+        if ns.domain == NSOSStatusErrorDomain || ns.code == 1 {
+            return "macOS refused it — move flow-bar to /Applications and try again"
+        }
+        return "macOS refused it: \(ns.localizedDescription)"
     }
 
     /// Preferred flow terminal backend (FLOW_TERM); "" = let flow auto-detect.
@@ -562,6 +620,13 @@ final class Store: ObservableObject {
 
     private enum BatchOutcome: Sendable { case ok, alreadyOpen, failed(String) }
 
+    /// Pause between spawns in a multi-open, to let each new tab's harness
+    /// session finish starting before the next tab steals the terminal.
+    /// Empirical, not principled: `flow do` gives us no "session is ready"
+    /// signal to wait on, so this is the smallest gap that reliably let a
+    /// Claude session come up before the next spawn.
+    private static let multiOpenSettleNanos: UInt64 = 1_200_000_000  // 1.2s
+
     /// Open several tasks at once. All `flow do` calls run in PARALLEL.
     func switchToAll(_ slugs: [String]) {
         // Snapshot BEFORE dismissing. `dismissPopover()` synchronously triggers
@@ -574,6 +639,7 @@ final class Store: ObservableObject {
         // already exactly right, and there is nothing to aggregate).
         if batch.count == 1 { switchTo(batch[0]); return }
 
+        FlowClient.log("multi-open: opening \(batch.count) sequentially — \(batch.joined(separator: ", "))")
         selectedTaskSlugs = []
         Self.dismissPopover()
         spawningOps += batch.count   // counter, so the spinner spans the batch
@@ -582,27 +648,52 @@ final class Store: ObservableObject {
             var succeeded = 0, alreadyOpen = 0
             var failures: [(slug: String, message: String)] = []
 
-            await withTaskGroup(of: (String, BatchOutcome).self) { group in
-                for slug in batch {
-                    group.addTask(priority: .userInitiated) {
-                        (slug, await Self.doTaskOffThread(slug))
-                    }
+            // SEQUENTIAL, not parallel — and this is deliberate.
+            //
+            // `flow do` returns once it has CREATED the terminal tab, not once
+            // the harness session inside it has finished starting. Firing the
+            // batch in parallel therefore raced: a second tab opened while the
+            // first was still bootstrapping its Claude session, the two
+            // interleaved, and neither came up properly. (Observed with the
+            // zellij backend; the AppleScript backends are worse, since several
+            // concurrent `osascript` clients driving one terminal can also land
+            // tabs in the wrong window.)
+            //
+            // So each task gets the terminal to itself: open it, wait for
+            // `flow do` to return, then let the session settle before the next.
+            for slug in batch {
+                let outcome = await Self.doTaskOffThread(slug)
+                self.spawningOps -= 1
+                switch outcome {
+                case .ok:            succeeded += 1
+                case .alreadyOpen:   alreadyOpen += 1
+                case .failed(let m): failures.append((slug, m))
                 }
-                for await (slug, outcome) in group {
-                    self.spawningOps -= 1   // decrement as each lands
-                    switch outcome {
-                    case .ok:            succeeded += 1
-                    case .alreadyOpen:   alreadyOpen += 1
-                    case .failed(let m): failures.append((slug, m))
-                    }
+                FlowClient.log("multi-open: \(slug) -> \(outcome)")
+                // Settle gap, skipped after the last one so the batch doesn't
+                // end on a pointless wait. Only needed when a tab was actually
+                // spawned — switching to an already-open tab is instant.
+                if slug != batch.last, case .ok = outcome {
+                    try? await Task.sleep(nanoseconds: Self.multiOpenSettleNanos)
                 }
             }
 
             // ONE flash, not N. `flashResult` cancels and restarts its reset
             // task on every call, so N calls would strobe and end on whichever
             // spawn happened to finish last.
+            FlowClient.log("multi-open: done — \(succeeded) opened, \(alreadyOpen) already open, "
+                           + "\(failures.count) failed")
             if failures.isEmpty {
                 self.errorText = nil
+                // Everything was already open: say so, otherwise a batch that
+                // worked perfectly is indistinguishable from one that did
+                // nothing — especially with zellij, where "switch tab" is
+                // invisible unless the terminal is already frontmost.
+                if succeeded == 0 {
+                    self.errorText = alreadyOpen == 1
+                        ? "already open — switched to its tab"
+                        : "all \(alreadyOpen) were already open — switched to the last one"
+                }
                 self.flashResult(succeeded == 0 ? .alreadyOpen : .success)
             } else {
                 self.errorText = Self.batchErrorText(

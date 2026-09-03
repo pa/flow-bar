@@ -53,6 +53,11 @@ enum Theme {
     static let tile   = Color(.sRGB, white: 1, opacity: 0.04)
     /// Chip / pill surface.
     static let chip   = Color(.sRGB, white: 1, opacity: 0.05)
+    /// Dark wash laid over the vibrancy so text contrast never depends on the
+    /// user's wallpaper. Tuned to stay clearly translucent while keeping
+    /// near-white body text legible over a bright backdrop.
+    static let scrim = Color(.sRGB, red: 0.075, green: 0.080, blue: 0.095, opacity: 0.62)
+
     /// Selected/active accent (fixed blue, not the user's system accent).
     static let accent = Color.blue
 }
