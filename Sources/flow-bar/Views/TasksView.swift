@@ -29,7 +29,10 @@ struct TasksView: View {
     @ObservedObject var store: Store
     let query: String
     @Binding var filter: TaskFilter
-    @State private var sort: TaskSort = .priority
+    /// Owned by the root, like `filter`, so Enter-to-open can respect the same
+    /// ordering the list is showing (it used to hardcode priority and open a
+    /// different task than the visually-first row).
+    @Binding var sort: TaskSort
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,16 +64,14 @@ struct TasksView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
                         .foregroundStyle(filter == f ? Color.white : Color(.sRGB, white: 0.62, opacity: 1))
-                        .background(filter == f ? Theme.accent : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .segmentSelection(isSelected: filter == f)
                         .contentShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(3)
-        .background(Theme.track)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .glassSurface(cornerRadius: 8, fallback: Theme.legacyTrack)
     }
 
     /// Sort picker (Priority / Recently updated).
@@ -118,12 +119,15 @@ struct TasksView: View {
     }
 
     private var filtered: [FlowTask] {
-        let base = source.filtered(by: query)
+        source.visible(query: query, sort: TasksView.coreSort(sort, filter))
+    }
+
+    /// Map the view's sort + filter onto the shared ordering used by both the
+    /// list and Enter-to-open. Static so MenuContentView can use it too.
+    static func coreSort(_ sort: TaskSort, _ filter: TaskFilter) -> TaskListSort {
         switch sort {
-        case .recentlyUpdated:
-            return base.sortedByRecentlyUpdated()
-        case .priority:
-            return filter == .inProgress ? base.sortedByPriority() : base.sortedByStatusThenPriority()
+        case .recentlyUpdated: return .recentlyUpdated
+        case .priority:        return filter == .inProgress ? .priority : .statusThenPriority
         }
     }
 
@@ -134,7 +138,10 @@ struct TasksView: View {
                     TaskRow(task: task, action: { store.switchTo(task.slug) },
                             onPeek: { store.peekBrief(task.slug) },
                             onRemind: { store.beginReminder(for: task) },
-                            showStatus: filter == .all || filter == .archived)
+                            showStatus: filter == .all || filter == .archived,
+                            showCheckbox: true,
+                            isChecked: store.selectedTaskSlugs.contains(task.slug),
+                            onToggle: { store.toggleSelection(task.slug) })
                 }
             }
             .padding(.vertical, 4)

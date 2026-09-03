@@ -159,11 +159,11 @@
     <p class="hero__tagline">See what's in flight and switch tasks — <em>right from your macOS menubar</em>, without hunting through terminal tabs.</p>
     <p class="hero__prompt"><span class="prompt-sigil grad-text">$</span>flow do tighten-checkout-timeout<span class="caret" aria-hidden="true"></span></p>
     <div class="hero__cta">
-      <a class="btn btn--primary" href="https://github.com/pa/flow-bar/releases/latest/download/flow-bar.dmg" download>
+      <a class="btn btn--primary" href="#install">
         <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v10M3.5 7.5L8 12l4.5-4.5M2 14h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Download for macOS
+        Install with Homebrew
       </a>
-      <a class="btn btn--ghost" href="#install">Install</a>
+      <a class="btn btn--ghost" href="https://github.com/pa/flow-bar/releases/latest/download/flow-bar.dmg" download>Download .dmg</a>
       <a class="btn btn--ghost" href="https://github.com/pa/flow-bar" target="_blank" rel="noopener" aria-label="GitHub">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.4.5 0 5.9 0 12.5c0 5.3 3.4 9.8 8.2 11.4.6.1.8-.3.8-.6v-2.1c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.8-1.6 8.2-6.1 8.2-11.4C24 5.9 18.6.5 12 .5z"/></svg>
       </a>
@@ -266,21 +266,25 @@
   <div class="sec-head">
     <div class="sec-eyebrow">install</div>
     <h2>From Homebrew to your menubar.</h2>
-    <p class="sec-lede">One tap, one cask — or grab the signed-later <code>.app</code> straight from the latest release.</p>
+    <p class="sec-lede">One tap, one cask — compiled on your Mac so the UI is native to <em>your</em> macOS.</p>
   </div>
   <div class="frame" style="max-width:640px;margin:0 auto">
     <div class="frame__chrome"><span class="dot" style="background:var(--red)"></span><span class="dot" style="background:var(--amber)"></span><span class="dot" style="background:var(--green)"></span><span class="t">zsh</span></div>
-    <div class="term__body"><span class="c"># add the tap, trust it, install the cask</span>
+    <div class="term__body"><span class="c"># needs Xcode or the Command Line Tools (full Xcode not required)</span>
+<span class="p">$</span> xcode-select --install
+
+<span class="c"># add the tap, trust it, install the cask</span>
 <span class="p">$</span> brew tap pa/flow-bar https://github.com/pa/flow-bar
-<span class="p">$</span> brew trust pa/flow-bar     <span class="c"># one-time, if Homebrew requires tap trust</span>
+<span class="p">$</span> brew trust pa/flow-bar
 <span class="p">$</span> brew install --cask flow-bar
 
-<span class="c"># …or grab the .app from the latest release</span>
-<span class="p">$</span> open https://github.com/pa/flow-bar/releases/latest</div>
+<span class="c"># later: update, or rebuild after a macOS major upgrade</span>
+<span class="p">$</span> brew upgrade --cask flow-bar
+<span class="p">$</span> brew reinstall --cask flow-bar</div>
   </div>
   <div class="note"><span class="grad-text" style="font-weight:700">!</span>
-    <div><b>First launch:</b> this build isn't notarized yet, so macOS Gatekeeper blocks it once. Allow it with
-    <code>xattr -dr com.apple.quarantine /Applications/flow-bar.app</code> and open it again.</div></div>
+    <div><b>Why it compiles:</b> SwiftUI takes its appearance from the macOS SDK a binary was <em>linked against</em>, not the OS it runs on — so a prebuilt download renders in compatibility mode on newer macOS, forever. Building on your machine (about a minute) is what makes flow-bar look native on whatever you're running. The build also self-signs with a per-machine certificate so the permission to control your terminal survives every upgrade.
+    <br><br>Prefer not to install a toolchain? The <code>.dmg</code> and <code>.zip</code> on the <a href="https://github.com/pa/flow-bar/releases/latest">latest release</a> are prebuilt — they need a one-time <code>xattr -dr com.apple.quarantine /Applications/flow-bar.app</code> and may not render natively on newer macOS.</div></div>
 </section>
 
 <footer>MIT © Pramodh Ayyappan · <a href="https://github.com/pa/flow-bar">github.com/pa/flow-bar</a></footer>

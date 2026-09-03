@@ -114,6 +114,10 @@ extension Store {
 
     /// Active root changed — drop cached data and reload against the new root.
     private func reloadForProfileSwitch() {
+        // Slugs are root-scoped: a check made under root A must never be fired
+        // against root B. Easy to miss because this is reachable from the footer
+        // without closing the popover.
+        selectedTaskSlugs = []
         projectTasks = []
         ownerTasks = []
         browseTasks = []

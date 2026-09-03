@@ -56,6 +56,10 @@ struct MenuContentView: View {
     @State private var section: Section = .tasks
     @State private var query: String = ""
     @State private var taskFilter: TaskFilter = .inProgress
+    /// Lifted out of TasksView so Enter-to-open can respect the visible order.
+    @State private var taskSort: TaskSort = .priority
+    /// Guard for a large batch: opening N tasks spawns N sessions.
+    @State private var confirmingBulkOpen = false
     @FocusState private var searchFocused: Bool
 
     /// flow terminal backends ($FLOW_TERM values). flow-bar is a GUI app with
@@ -75,14 +79,22 @@ struct MenuContentView: View {
             pane
         }
         .frame(width: 520, height: 560)
-        // Explicit OPAQUE fill (see Theme) — never the dynamic system colors,
-        // which render translucent over the popover's vibrancy on older SDKs.
-        .background(Theme.bg)
+        // On macOS 26 the popover gets a REAL material behind it, so the glass
+        // samples the desktop. Below that, the original opaque fill — never the
+        // dynamic system colors, which render translucent over the popover's
+        // vibrancy on older SDKs. (See Theme.)
+        .background {
+            if Theme.isGlass {
+                VisualEffectBackground(material: .popover).ignoresSafeArea()
+            } else {
+                Theme.bg
+            }
+        }
         .onAppear { prepareForOpen() }
-        .onChange(of: store.openNonce) { _ in prepareForOpen() }
+        .onChange(of: store.openNonce) { prepareForOpen() }
         // A task's "Remind me" bell seeds a draft while the popover is open —
         // jump to the Reminders section so its compose form appears.
-        .onChange(of: store.pendingReminderDraft?.id) { id in
+        .onChange(of: store.pendingReminderDraft?.id) { _, id in
             guard id != nil else { return }
             store.closePeek(); store.cancelCreate()
             section = .reminders
@@ -96,6 +108,8 @@ struct MenuContentView: View {
         store.closePeek(); store.cancelCreate()
         section = .tasks
         taskFilter = .inProgress
+        taskSort = .priority
+        confirmingBulkOpen = false
         query = ""
         // A notification tap sets pendingReminderID before opening — land on the
         // Reminders section (focused on that reminder) instead of In-progress.
@@ -121,9 +135,8 @@ struct MenuContentView: View {
                     Image(systemName: s.icon)
                         .font(.system(size: 17))
                         .frame(maxWidth: .infinity, minHeight: 32)
-                        .background(section == s ? Color.accentColor.opacity(0.2) : .clear)
                         .foregroundStyle(section == s ? Color.accentColor : .secondary)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .railSelection(isSelected: section == s)
                         .overlay(alignment: .topTrailing) {
                             if let n = railBadge(s), n > 0 {
                                 Text("\(n)")
@@ -165,6 +178,10 @@ struct MenuContentView: View {
                 }
                 Divider()
                 sectionView
+                if section == .tasks && !store.selectedTaskSlugs.isEmpty {
+                    Divider()
+                    selectionBar
+                }
                 Divider()
                 footer
             }
@@ -175,7 +192,7 @@ struct MenuContentView: View {
     private var sectionView: some View {
         switch section {
         case .dashboard: DashboardView(store: store) { navigate($0) }
-        case .tasks:     TasksView(store: store, query: query, filter: $taskFilter)
+        case .tasks:     TasksView(store: store, query: query, filter: $taskFilter, sort: $taskSort)
         case .inbox:     InboxView(store: store)
         case .projects:  ProjectsView(store: store, query: query)
         case .playbooks: PlaybooksView(store: store, query: query)
@@ -231,7 +248,13 @@ struct MenuContentView: View {
             TextField("Search \(headerTitle.lowercased())…", text: $query)
                 .textFieldStyle(.plain).font(.system(size: 16))
                 .focused($searchFocused)
-                .onSubmit { if section == .tasks { switchToFirstTask() } }
+                .onSubmit {
+                    guard section == .tasks else { return }
+                    // A non-empty selection wins: Enter commits the thing the
+                    // user has been building, which the action bar makes visible.
+                    if store.selectedTaskSlugs.isEmpty { switchToFirstTask() }
+                    else { openSelected() }
+                }
             if !query.isEmpty {
                 Button { query = ""; searchFocused = true } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -239,8 +262,7 @@ struct MenuContentView: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 7)
-        .background(Theme.field)
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .glassSurface(cornerRadius: 7, fallback: Theme.legacyField)
         .padding(.horizontal, 10).padding(.bottom, 6)
     }
 
@@ -338,7 +360,32 @@ struct MenuContentView: View {
             }
             .buttonStyle(.plain).help(msg)
         case .idle:
-            if let up = store.availableUpdate {
+            if let up = store.availableUpdate, store.isManagedInstall {
+                // Homebrew owns this install: offer the command, not an install.
+                Button { store.installUpdate() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.on.doc").font(.system(size: 11))
+                        Text("v\(up.version) — brew upgrade").font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Copy “\(Updater.upgradeCommand)” to the clipboard")
+            } else if store.needsSDKRebuild {
+                // Built against an older SDK than the OS we're on, so the UI is
+                // rendering in compatibility mode. A rebuild fixes it.
+                Button { store.copyToPasteboard(Updater.rebuildCommand) } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles").font(.system(size: 11))
+                        Text("Rebuild for macOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Built against the macOS \(AppInfo.buildSDK ?? "?") SDK. "
+                      + "Copy “\(Updater.rebuildCommand)” to rebuild natively.")
+            } else if let up = store.availableUpdate {
                 Button { store.installUpdate() } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.down.circle.fill").font(.system(size: 12))
@@ -419,9 +466,76 @@ struct MenuContentView: View {
         }
     }
 
+    /// Open the first row Enter should act on.
+    ///
+    /// This used to hardcode `store.tasks` + `sortedByPriority()`, ignoring both
+    /// the active filter and the sort — so Enter on the Done tab opened some
+    /// unrelated in-progress task. Now it goes through the same `visible(...)`
+    /// helper the list renders from, and skips rows `flow do` can't act on.
     private func switchToFirstTask() {
-        if let first = store.tasks.filtered(by: query).sortedByPriority().first {
+        let source = taskFilter == .inProgress ? store.tasks : store.browseTasks
+        if let first = source.firstOpenable(
+            query: query, sort: TasksView.coreSort(taskSort, taskFilter)) {
             store.switchTo(first.slug)
         }
+    }
+
+    /// Slugs currently visible under the active filter + search. Used to tell
+    /// the user how many of their checks the search is hiding.
+    private var visibleTaskSlugs: Set<String> {
+        let source = taskFilter == .inProgress ? store.tasks : store.browseTasks
+        return Set(source.filtered(by: query).map(\.slug))
+    }
+
+    /// Opening N tasks spawns N sessions, which is a much heavier action than
+    /// the single click it inherits from — confirm once past this many.
+    private static let bulkOpenConfirmThreshold = 5
+
+    private func openSelected() {
+        let batch = store.orderedSelection
+        if batch.count > Self.bulkOpenConfirmThreshold && !confirmingBulkOpen {
+            confirmingBulkOpen = true
+            return
+        }
+        confirmingBulkOpen = false
+        store.switchToAll(batch)
+    }
+
+    /// "N selected · M hidden by search — Clear — Open all".
+    ///
+    /// The hidden count is the load-bearing part: after re-searching, none of
+    /// the ticked rows are on screen, and without this the user has no evidence
+    /// their earlier checks survived. That reassurance is the feature.
+    private var selectionBar: some View {
+        let summary = selectionSummary(selected: store.selectedTaskSlugs,
+                                       visibleSlugs: visibleTaskSlugs)
+        return HStack(spacing: 8) {
+            Image(systemName: "checkmark.square.fill")
+                .font(.system(size: 12)).foregroundStyle(Theme.accent)
+            Text("\(summary.total) selected")
+                .font(.system(size: 12, weight: .medium))
+            if summary.hidden > 0 {
+                Text("· \(summary.hidden) hidden by search")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if confirmingBulkOpen {
+                Text("Open \(summary.total) sessions?")
+                    .font(.system(size: 12)).foregroundStyle(.orange)
+                Button("Cancel") { confirmingBulkOpen = false }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
+                Button("Open all") { openSelected() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.orange)
+            } else {
+                Button("Clear") { store.clearSelection() }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
+                Button("Open all (\(summary.total))") { openSelected() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
     }
 }

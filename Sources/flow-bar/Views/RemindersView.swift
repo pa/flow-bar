@@ -39,8 +39,8 @@ struct RemindersView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { consumeDraft(); consumeFocus() }
-        .onChange(of: store.pendingReminderDraft?.id) { _ in consumeDraft() }
-        .onChange(of: store.pendingReminderID) { _ in consumeFocus() }
+        .onChange(of: store.pendingReminderDraft?.id) { consumeDraft() }
+        .onChange(of: store.pendingReminderID) { consumeFocus() }
     }
 
     // MARK: - List
@@ -63,7 +63,7 @@ struct RemindersView: View {
                         }
                         .padding(.vertical, 6)
                     }
-                    .onChange(of: focusID) { id in
+                    .onChange(of: focusID) { _, id in
                         guard let id else { return }
                         withAnimation { proxy.scrollTo(id, anchor: .center) }
                     }

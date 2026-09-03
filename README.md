@@ -12,7 +12,7 @@ see what's in flight and switch between tasks without leaving the menubar.
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Platform: macOS 13+](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)
+![Platform: macOS 15+](https://img.shields.io/badge/macOS-15%2B-black?logo=apple)
 ![Built with Swift](https://img.shields.io/badge/Swift-6-orange?logo=swift)
 
 > flow-bar is a **companion** to the `flow` CLI — it reads your tasks through
@@ -59,22 +59,60 @@ see what's in flight and switch between tasks without leaving the menubar.
 
 ```sh
 brew tap pa/flow-bar https://github.com/pa/flow-bar
+brew trust pa/flow-bar
 brew install --cask flow-bar
 ```
 
-### Download
+This **compiles flow-bar on your machine** (about a minute). That's deliberate:
+SwiftUI picks its appearance from the macOS SDK a binary was *linked against*,
+not the OS it runs on — so a prebuilt binary renders in compatibility mode on
+any newer macOS, forever. Building locally means the app looks native on
+whatever you're running.
 
-Grab `flow-bar.zip` from the [latest release](https://github.com/pa/flow-bar/releases/latest),
-unzip, and move `flow-bar.app` to `/Applications`. On first launch:
+You need Xcode or the Command Line Tools (full Xcode is not required):
 
 ```sh
-xattr -d com.apple.quarantine /Applications/flow-bar.app   # unsigned build
+xcode-select --install
 ```
+
+The build also creates a per-machine self-signed certificate in a dedicated
+`flow-bar-signing` keychain and signs the app with it. That keeps flow-bar's
+code identity stable, so the macOS permission to control your terminal survives
+every upgrade. Nothing is sent anywhere; the key never leaves your Mac.
+
+### Updating
+
+```sh
+brew upgrade --cask flow-bar
+```
+
+After a **macOS major upgrade**, rebuild so the app links against the new SDK:
+
+```sh
+brew reinstall --cask flow-bar
+```
+
+flow-bar tells you when this is worth doing — Settings shows which SDK the
+running build was compiled against.
+
+### Download (prebuilt)
+
+If you'd rather not install a toolchain, grab `flow-bar.zip` or `flow-bar.dmg`
+from the [latest release](https://github.com/pa/flow-bar/releases/latest),
+unzip, and move `flow-bar.app` to `/Applications`. These are built in CI, so
+they may render in compatibility mode on newer macOS. On first launch:
+
+```sh
+xattr -d com.apple.quarantine /Applications/flow-bar.app   # not notarized
+```
+
+(The Homebrew build is created locally and is never quarantined, so it doesn't
+need this.)
 
 ## Build from source
 
 Requires the Swift toolchain (Xcode or Command Line Tools). No Xcode project —
-everything is SwiftPM.
+everything is SwiftPM. This is the same path `brew install --cask` takes.
 
 ```sh
 swift build                 # build all targets
@@ -96,8 +134,8 @@ Click the menubar **w** (or press your global hotkey — default **⌥⌘F**):
 Opening a task runs `flow do`, which opens or focuses its session in your chosen
 terminal. **zellij** needs no macOS permission; the AppleScript terminals
 (**iTerm / Terminal / Warp / Ghostty**) ask once for **Automation** (Terminal
-also **Accessibility**). Since the app is signed but not yet notarized, first
-launch needs a one-time Gatekeeper unblock (right-click → Open, or `xattr`).
+also **Accessibility**). You grant that once — flow-bar keeps a stable code
+signature so the grant survives upgrades.
 
 ## Architecture
 

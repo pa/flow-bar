@@ -289,7 +289,21 @@ public struct FlowClient: Sendable {
         return Self.parseOwners(String(data: data, encoding: .utf8) ?? "")
     }
 
+    /// Valid `flow owner list` status values. Used to tell a real data row from
+    /// prose — see `parseOwners`.
+    static let ownerStatuses: Set<String> = ["active", "paused", "retired"]
+
     /// Parse `flow owner list` text (pure — unit-testable).
+    ///
+    /// `flow owner list` has no `--format json`, and when there are no owners it
+    /// prints a *help sentence*, not an empty table:
+    ///
+    ///     No owners. Create one with: flow add owner "<name>" --work-dir <path> …
+    ///
+    /// Splitting that on whitespace yields ≥3 fields, so a purely positional
+    /// parser happily emits a bogus owner (slug "No", status "owners.").
+    /// Rows are therefore validated STRUCTURALLY: field 2 must be a real status.
+    /// That also rejects any future prose without needing to match its wording.
     public static func parseOwners(_ text: String) -> [Owner] {
         var owners: [Owner] = []
         for raw in text.split(separator: "\n") {
@@ -298,12 +312,28 @@ public struct FlowClient: Sendable {
                 .map(String.init).filter { !$0.isEmpty }
             guard let first = fields.first, first != "SLUG" else { continue }
             guard fields.count >= 3 else { continue }
-            // After the iso timestamp, the rest is "(in 1h59m0s)".
-            let iso = fields.count > 3 ? fields[3] : nil
-            let rel = fields.count > 4
-                ? fields[4...].joined(separator: " ")
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "()"))
-                : nil
+            // The structural gate: prose never has a valid status in field 2.
+            guard ownerStatuses.contains(fields[1].lowercased()) else { continue }
+            // The NEXT TICK column is either "<iso> (in 1h59m0s)" or a bare
+            // parenthesised state like "(not started)" / "(paused)". Assuming
+            // field 3 is always a timestamp yields nextTick "(not" — so branch
+            // on whether the column actually starts with a timestamp.
+            let rest = fields.count > 3 ? Array(fields[3...]) : []
+            let iso: String?
+            let rel: String?
+            if let head = rest.first, !head.hasPrefix("(") {
+                iso = head
+                rel = rest.count > 1
+                    ? rest[1...].joined(separator: " ")
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+                    : nil
+            } else {
+                iso = nil
+                rel = rest.isEmpty
+                    ? nil
+                    : rest.joined(separator: " ")
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+            }
             owners.append(Owner(slug: fields[0], status: fields[1],
                                 every: fields[2], nextTick: iso,
                                 nextTickRelative: rel))
@@ -312,7 +342,18 @@ public struct FlowClient: Sendable {
     }
 
     /// `flow list tags` — text only. Header row then `#tag  N tasks`.
+    /// Tags, preferring JSON.
+    ///
+    /// `flow list tags` DOES support `--format json` (unlike `flow owner list`),
+    /// and JSON gets the empty case right — it returns `[]` where the text mode
+    /// prints the prose "(no tags in use)". Text parsing is kept as a fallback
+    /// for older `flow` binaries that predate the flag.
     public func listTags() throws -> [TagCount] {
+        if let (data, _, code) = try? Self.run("flow", ["list", "tags", "--format", "json"]),
+           code == 0,
+           let tags = try? JSONDecoder().decode([TagCount].self, from: data) {
+            return tags
+        }
         let (data, stderr, code) = try Self.run("flow", ["list", "tags"])
         guard code == 0 else {
             throw FlowClientError.commandFailed(
@@ -328,8 +369,12 @@ public struct FlowClient: Sendable {
             let fields = String(raw).split(whereSeparator: { $0 == " " || $0 == "\t" })
                 .map(String.init).filter { !$0.isEmpty }
             guard let first = fields.first, first != "TAG", fields.count >= 2 else { continue }
+            // Structural gate, same reasoning as parseOwners: with no tags in
+            // use `flow list tags` prints the prose "(no tags in use)", which a
+            // positional parser turns into a tag named "(no" with count 0. A
+            // real row always has an integer count in field 2.
+            guard let count = Int(fields[1]) else { continue }
             let tag = first.hasPrefix("#") ? String(first.dropFirst()) : first
-            let count = Int(fields[1]) ?? 0
             tags.append(TagCount(tag: tag, count: count))
         }
         return tags

@@ -15,13 +15,37 @@ struct TaskRow: View {
     /// Show the project name. Off in the Projects drill-in (redundant there).
     var showProject: Bool = true
 
+    // Multi-select. All defaulted, so the other six TaskRow call sites compile
+    // untouched and — because the checkbox is inside `if showCheckbox` — keep
+    // byte-identical geometry.
+    var showCheckbox: Bool = false
+    var isChecked: Bool = false
+    var onToggle: (() -> Void)? = nil
+
     private var isDone: Bool { task.status == "done" }
     /// Done or archived tasks have nothing to switch to — `flow do` on them is a
     /// no-op at best, so the open action is disabled (brief peek stays available).
-    private var canOpen: Bool { !isDone && !task.isArchived }
+    private var canOpen: Bool { task.canOpen }
 
     var body: some View {
         HStack(spacing: 2) {
+            if showCheckbox {
+                // A sibling of mainButton, not inside it, so the two hit regions
+                // never overlap: ticking must not also open the task. 26x26
+                // matches the peek button's target size.
+                Button { onToggle?() } label: {
+                    Image(systemName: isChecked ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 13))
+                        .foregroundStyle(isChecked ? Theme.accent : Color.secondary.opacity(0.55))
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canOpen)
+                .opacity(canOpen ? 1 : 0.25)
+                .help(canOpen ? (isChecked ? "Uncheck" : "Check to open with others")
+                              : "Nothing to open")
+            }
             mainButton
                 .disabled(!canOpen)
                 .opacity(canOpen ? 1 : 0.7)

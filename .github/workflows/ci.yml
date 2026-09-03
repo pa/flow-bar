@@ -1,0 +1,48 @@
+name: ci
+
+# Build + test on every macOS we support. Building against the newest SDK here
+# is how SDK drift (deprecations, changed control rendering) gets caught before
+# a user's `brew install` compiles against it on their machine.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      # macos-26 may not be available to every account yet; don't fail the run.
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          echo "SDK: $(xcrun --show-sdk-version)"
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift run flowbar-tests
+
+      # The app bundle is assembled by a shell script rather than SwiftPM, so
+      # exercise that path too — a broken build-app.sh breaks every install.
+      - name: Assemble the app bundle
+        run: ./build-app.sh --version 0.0.0 --channel dev --no-sign
+
+  cask:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint the cask
+        run: brew style Casks/flow-bar.rb

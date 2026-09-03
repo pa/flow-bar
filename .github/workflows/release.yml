@@ -1,7 +1,14 @@
 name: release
 
-# Tag a version (e.g. `git tag v0.1.0 && git push --tags`) to build the app,
-# attach flow-bar.zip to a GitHub release, and update the Homebrew cask.
+# Tag a version (e.g. `git tag v0.3.0 && git push --tags`) to run the tests,
+# publish prebuilt downloads, and point the Homebrew cask at the new tag.
+#
+# NOTE ON WHAT THIS DOES NOT DO ANY MORE: the cask no longer ships a prebuilt
+# binary. It downloads the SOURCE TARBALL and compiles on the user's machine,
+# because SwiftUI picks its appearance from the SDK the binary was linked
+# against — a CI-built binary renders in compatibility mode on any newer macOS.
+# The zip/dmg below exist only for people who won't install a toolchain, and
+# for the in-app updater that serves them.
 on:
   push:
     tags:
@@ -12,7 +19,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -21,25 +28,28 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Show Swift version
-        run: swift --version
+      - name: Show toolchain
+        run: |
+          swift --version
+          echo "SDK: $(xcrun --show-sdk-version)"
 
       - name: Run tests
         run: swift run flowbar-tests
 
-      # Sign every release with ONE persistent self-signed cert so the app's
+      # Sign the prebuilt downloads with ONE persistent self-signed cert so their
       # Designated Requirement stays constant across versions — that's what lets
-      # macOS keep Accessibility/Automation grants after an upgrade (ad-hoc's
-      # identity changes each build, so TCC drops the grant every time).
+      # macOS keep the Automation grant after an in-app update (ad-hoc's identity
+      # changes each build, so TCC drops the grant every time).
+      #
+      # Source installs don't use this: they get a per-machine identity created
+      # by scripts/create-signing-cert.sh at install time.
       - name: Import signing certificate
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          CERT_PEM: ${{ secrets.MACOS_CERT_PEM }}
         run: |
           set -euo pipefail
           P12="$RUNNER_TEMP/signing.p12"
-          PEM="$RUNNER_TEMP/signing.pem"
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
           KC_PASS="ci-signing-pass"
           echo "$CERT_P12" | base64 --decode > "$P12"
@@ -50,15 +60,17 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
           # keep login keychain in the search list too
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
-          # a self-signed cert must be TRUSTED for code signing to be a *valid*
-          # identity (otherwise codesign silently falls back to ad-hoc).
-          echo "$CERT_PEM" | base64 --decode > "$PEM"
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$PEM"
-          security find-identity -v -p codesigning "$KEYCHAIN"
+          # NOT `-v`: a self-signed codesigning cert always reports
+          # CSSMERR_TP_NOT_TRUSTED, so the valid-only listing hides it even
+          # though codesign signs with it fine. (This is also why the old
+          # `sudo security add-trusted-cert` step was dropped — trust is needed
+          # to *validate* a signature, not to produce one. Verified locally: an
+          # untrusted self-signed identity signs and yields a stable DR.)
+          security find-identity -p codesigning "$KEYCHAIN"
           echo "CODESIGN_IDENTITY=flow-bar-signing" >> "$GITHUB_ENV"
 
       - name: Build app bundle
-        run: ./build-app.sh
+        run: ./build-app.sh --version "${GITHUB_REF_NAME#v}" --channel github-release
 
       - name: Verify signature
         run: |
@@ -70,37 +82,67 @@ jobs:
             exit 1
           fi
 
-      # Two assets: flow-bar.zip (consumed by the cask + the in-app updater) and
-      # flow-bar.dmg (drag-to-Applications download for humans on the release page).
+      # Two assets, both PREBUILT and therefore SDK-pinned to this runner:
+      # flow-bar.zip (the in-app updater's payload) and flow-bar.dmg (a
+      # drag-to-Applications download). The cask uses neither.
       - name: Zip the app
         run: ditto -c -k --keepParent flow-bar.app flow-bar.zip
 
       - name: Build DMG
         run: ./build-dmg.sh
 
-      - name: Compute checksum
+      # The cask now installs from source, so its checksum is over the tag's
+      # source tarball — not over any artifact we built here.
+      - name: Compute source tarball checksum
         id: sum
-        run: echo "sha256=$(shasum -a 256 flow-bar.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          # Retry: the tag archive can lag the tag push by a few seconds.
+          for i in 1 2 3 4 5; do
+            SHA="$(curl -fsSL "$URL" | shasum -a 256 | awk '{print $1}')" && break
+            echo "attempt $i failed; retrying"; sleep 5
+          done
+          test -n "${SHA:-}" || { echo "::error::could not fetch $URL"; exit 1; }
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Update Homebrew cask
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          SHA="${{ steps.sum.outputs.sha256 }}"
-          sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/flow-bar.rb
-          sed -i '' -E "s/sha256 .*/sha256 \"${SHA}\"/" Casks/flow-bar.rb
+          set -euo pipefail
+          # Fails loudly on a botched rewrite instead of shipping a stale cask.
+          python3 scripts/cask_update.py "${GITHUB_REF_NAME#v}" "${{ steps.sum.outputs.sha256 }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/flow-bar.rb
-          git commit -m "cask: ${GITHUB_REF_NAME} (${SHA})" || echo "no cask change"
-          git push origin HEAD:main || echo "push skipped"
+          git commit -m "cask: ${GITHUB_REF_NAME} (source build)" || echo "no cask change"
+          git push origin HEAD:main
 
-      # Publish the top (latest) CHANGELOG.md section as the release notes.
+      # Publish the top (latest) CHANGELOG.md section as the release notes,
+      # with the install instructions appended. NOTE: softprops/action-gh-release
+      # ignores `body` entirely when `body_path` is set, so the install block has
+      # to be written INTO this file rather than passed alongside it.
       - name: Extract changelog notes
         id: notes
         run: |
           NOTES="$RUNNER_TEMP/release-notes.md"
           awk '/^## /{c++} c==1{print} c==2{exit}' CHANGELOG.md > "$NOTES"
           if [ ! -s "$NOTES" ]; then echo "no changelog section found" ; fi
+          cat >> "$NOTES" <<'MD'
+
+          ## Install
+
+          Homebrew (recommended — compiles on your machine so the UI is native to
+          your macOS version):
+
+          ```sh
+          brew tap pa/flow-bar https://github.com/pa/flow-bar
+          brew trust pa/flow-bar
+          brew install --cask flow-bar
+          ```
+
+          The `.dmg` and `.zip` below are **prebuilt** against the CI runner's SDK
+          and may render in compatibility mode on newer macOS releases.
+          MD
           echo "path=$NOTES" >> "$GITHUB_OUTPUT"
 
       - name: Create release
@@ -109,7 +151,7 @@ jobs:
           files: |
             flow-bar.dmg
             flow-bar.zip
-          # Curated changelog section, with the auto-generated commit/PR list
-          # appended underneath.
+          # Curated changelog + install notes, with the auto-generated commit/PR
+          # list appended underneath.
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true

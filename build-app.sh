@@ -1,6 +1,29 @@
 #!/bin/bash
 # Assemble flow-bar.app from a SwiftPM release build.
-# Usage: ./build-app.sh [--run]
+#
+# This is the SINGLE build entry point — CI, the Homebrew cask, and local dev
+# all go through here. Keep it that way: the cask invokes it via
+# `installer script:`, so any build logic that lives elsewhere is logic the
+# cask can't reach.
+#
+# Usage:
+#   ./build-app.sh [--run]
+#   ./build-app.sh --version 0.3.0 --channel homebrew-source --sign-local
+#
+# Options:
+#   --version X.Y.Z   Version to stamp. Takes precedence over $APP_VERSION.
+#                     REQUIRED for cask installs: Homebrew's
+#                     Cask::Artifact::Installer hardcodes the child env, so
+#                     there is no way to pass APP_VERSION in.
+#   --channel C       Install provenance baked into Info.plist as
+#                     FBInstallChannel: homebrew-source | github-release | dev.
+#                     The updater reads it to decide whether it may self-install.
+#   --sign-local      Sign with a per-machine self-signed identity, creating it
+#                     first if absent. This is what keeps the TCC Automation
+#                     grant alive across `brew upgrade` (see below).
+#   --no-sign         Force ad-hoc signing.
+#   --swift-flags "…" Extra flags passed through to `swift build`.
+#   --run             Launch the app when done.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -8,9 +31,61 @@ cd "$(dirname "$0")"
 APP="flow-bar.app"
 CONFIG="release"
 BIN=".build/${CONFIG}/flow-bar"
+LOCAL_IDENTITY="flow-bar Code Signing"
 
-echo "==> swift build -c ${CONFIG}"
-swift build -c "${CONFIG}"
+VERSION_ARG=""
+CHANNEL=""
+SIGN_MODE=""          # local | none | "" (=> $CODESIGN_IDENTITY, else ad-hoc)
+SWIFT_FLAGS=""
+DO_RUN=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --version)     VERSION_ARG="$2"; shift 2 ;;
+        --channel)     CHANNEL="$2";     shift 2 ;;
+        --swift-flags) SWIFT_FLAGS="$2"; shift 2 ;;
+        --sign-local)  SIGN_MODE="local"; shift ;;
+        --no-sign)     SIGN_MODE="none";  shift ;;
+        --run)         DO_RUN=1; shift ;;
+        --no-open)     DO_RUN=0; shift ;;
+        *) echo "error: unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+
+# --- Toolchain preflight -----------------------------------------------------
+# Users installing from the cask compile on their own machine, so a missing or
+# misconfigured toolchain is a normal failure mode, not an exotic one. Say
+# exactly what to run.
+if ! command -v swift >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+error: no Swift toolchain found.
+
+flow-bar compiles on your machine so it links against your macOS SDK. Install
+the Command Line Tools (about 1 GB — full Xcode is not required):
+
+    xcode-select --install
+EOF
+    exit 1
+fi
+if ! swift build --help >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+error: `swift` is on PATH but not runnable.
+
+This usually means xcode-select points at a moved or deleted Xcode. Fix with:
+
+    sudo xcode-select --reset
+EOF
+    exit 1
+fi
+
+SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || echo unknown)"
+echo "==> toolchain: $(swift --version 2>/dev/null | head -1)"
+echo "==> macOS SDK: ${SDK_VERSION}"
+
+# --- Build -------------------------------------------------------------------
+echo "==> swift build -c ${CONFIG} ${SWIFT_FLAGS}"
+# shellcheck disable=SC2086
+swift build -c "${CONFIG}" ${SWIFT_FLAGS}
 
 echo "==> assembling ${APP}"
 rm -rf "${APP}"
@@ -30,7 +105,7 @@ if xcrun --find actool >/dev/null 2>&1; then
     if actool "Resources/AppIcon.xcassets" \
             --compile "${APP}/Contents/Resources" \
             --platform macosx \
-            --minimum-deployment-target 13.0 \
+            --minimum-deployment-target 15.0 \
             --app-icon AppIcon \
             --output-partial-info-plist "${PARTIAL}" >/dev/null 2>&1 \
         && [ -f "${APP}/Contents/Resources/Assets.car" ]; then
@@ -44,29 +119,74 @@ else
     echo "==> actool unavailable — loose icns only (notification left-icon blank on this build)"
 fi
 
-# Stamp the real version into the bundle so the in-app updater can compare it
-# against the latest GitHub release. Prefer $APP_VERSION, then the CI tag
-# ($GITHUB_REF_NAME), then the latest git tag; fall back to a dev marker.
-VERSION="${APP_VERSION:-}"
+# --- Version + provenance ----------------------------------------------------
+# Precedence: --version → $APP_VERSION → CI tag → git tag → dev marker.
+# A source tarball has no git metadata, which is why --version exists.
+VERSION="${VERSION_ARG}"
+[ -z "${VERSION}" ] && VERSION="${APP_VERSION:-}"
 [ -z "${VERSION}" ] && [ -n "${GITHUB_REF_NAME:-}" ] && VERSION="${GITHUB_REF_NAME#v}"
 [ -z "${VERSION}" ] && VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)"
 [ -z "${VERSION}" ] && VERSION="0.0.0-dev"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${APP}/Contents/Info.plist"
-echo "==> version ${VERSION}"
 
-# Code signature. Defaults to ad-hoc ("-") for local dev builds. Release CI
-# sets CODESIGN_IDENTITY to a STABLE self-signed cert so the app's Designated
-# Requirement stays constant across versions — that's what lets macOS keep
-# Accessibility/Automation grants after an upgrade (ad-hoc's identity changes
-# every build, so TCC treats each update as a new app and drops the grant).
-SIGN_ID="${CODESIGN_IDENTITY:--}"
+[ -z "${CHANNEL}" ] && CHANNEL="dev"
+
+PLIST="${APP}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PLIST}"
+# CFBundleVersion was frozen at 1 for a long time. LaunchServices uses it to
+# arbitrate between copies of the same bundle ID, so a frozen build number can
+# make it prefer a stale copy. Keep it in step with the marketing version.
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "${PLIST}"
+
+# Provenance, read back by Updater.swift. Baked into the plist rather than a
+# sidecar file so it survives the bundle being copied or moved — a path check
+# can't distinguish a cask install in /Applications from a manual DMG install.
+plist_set_string() {
+    /usr/libexec/PlistBuddy -c "Set :$1 $2" "${PLIST}" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Add :$1 string $2" "${PLIST}"
+}
+plist_set_string FBInstallChannel "${CHANNEL}"
+plist_set_string FBBuildSDK "${SDK_VERSION}"
+
+echo "==> version ${VERSION}  channel ${CHANNEL}  sdk ${SDK_VERSION}"
+
+# --- Code signature ----------------------------------------------------------
+# Why this matters: FlowClient.spawnDisclaimed deliberately does NOT disclaim
+# responsibility for the AppleScript terminal backends, so flow-bar itself owns
+# the TCC Automation grant. TCC keys that grant to the Designated Requirement.
+# An ad-hoc signature's DR is the code hash, which changes every single build —
+# so ad-hoc means the grant is dropped on every upgrade and `flow do` silently
+# starts failing with -1743.
+#
+# A self-signed identity gives a stable, hash-pinned DR
+# (`identifier "cloud.facets.flow-bar" and certificate leaf = H"…"`) that holds
+# across rebuilds. The cert does NOT need to be added as a trusted root —
+# trust is required to *validate* a signature, not to produce one.
+if [ "${SIGN_MODE}" = "local" ]; then
+    if ! security find-identity -p codesigning 2>/dev/null | grep -q "${LOCAL_IDENTITY}"; then
+        echo "==> creating local signing identity"
+        ./scripts/create-signing-cert.sh || true
+    fi
+    if security find-identity -p codesigning 2>/dev/null | grep -q "${LOCAL_IDENTITY}"; then
+        SIGN_ID="${LOCAL_IDENTITY}"
+        security unlock-keychain -p "flow-bar-signing" "flow-bar-signing.keychain" 2>/dev/null || true
+    else
+        echo "    (could not create a local identity — falling back to ad-hoc;"
+        echo "     you may need to re-grant Automation after each upgrade)"
+        SIGN_ID="-"
+    fi
+elif [ "${SIGN_MODE}" = "none" ]; then
+    SIGN_ID="-"
+else
+    SIGN_ID="${CODESIGN_IDENTITY:--}"
+fi
+
 echo "==> codesign (identity: ${SIGN_ID})"
 codesign --force --deep --sign "${SIGN_ID}" "${APP}" >/dev/null 2>&1 || \
     echo "    (codesign skipped — unsigned bundle will still run locally)"
 
 echo "==> built ${PWD}/${APP}"
 
-if [[ "${1:-}" == "--run" ]]; then
+if [ "${DO_RUN}" = "1" ]; then
     echo "==> launching"
     open "${APP}"
 fi

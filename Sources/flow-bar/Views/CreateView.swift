@@ -84,14 +84,14 @@ struct CreateView: View {
                     labeled("Name", error: trimmedName.isEmpty ? "required" : nil) {
                         TextField("What needs doing?", text: $name)
                             .textFieldStyle(.roundedBorder)
-                            .onChange(of: name) { _ in
+                            .onChange(of: name) {
                                 if !slugEdited { suppressSlugEdit = true; slug = slugify(name) }
                             }
                     }
                     labeled("Slug", error: taskSlugError) {
                         TextField("slug", text: $slug)
                             .textFieldStyle(.roundedBorder)
-                            .onChange(of: slug) { _ in
+                            .onChange(of: slug) {
                                 if suppressSlugEdit { suppressSlugEdit = false } else { slugEdited = true }
                             }
                     }
@@ -306,14 +306,14 @@ struct CreateView: View {
             labeled("New project name", error: npName.trimmingCharacters(in: .whitespaces).isEmpty ? "required" : nil) {
                 TextField("Project name", text: $npName)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: npName) { _ in
+                    .onChange(of: npName) {
                         if !npSlugEdited { suppressNpSlugEdit = true; npSlug = slugify(npName) }
                     }
             }
             labeled("Project slug", error: npSlugError) {
                 TextField("project-slug", text: $npSlug)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: npSlug) { _ in
+                    .onChange(of: npSlug) {
                         if suppressNpSlugEdit { suppressNpSlugEdit = false } else { npSlugEdited = true }
                     }
             }

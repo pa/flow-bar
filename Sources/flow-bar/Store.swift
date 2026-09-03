@@ -87,6 +87,32 @@ final class Store: ObservableObject {
     /// navigation to the In-progress tab without recreating the view.
     @Published var openNonce = 0
 
+    // MARK: Multi-select
+
+    /// Slugs the user has ticked for a batch open.
+    ///
+    /// SLUGS, not tasks, and deliberately NOT pruned when the list reloads: the
+    /// slug is all `flow do` needs, so a check survives the list being replaced
+    /// by a poll or narrowed by a new search. That survival IS the feature —
+    /// the user ticks a couple, re-searches, ticks a couple more, opens all.
+    ///
+    /// Lives on Store rather than in TasksView because every point that
+    /// invalidates it is here: `endActiveRefresh()` (popover close) and
+    /// `reloadForProfileSwitch()` (FLOW_ROOT change — reachable from the footer
+    /// WITHOUT closing the popover, so a view-owned set would happily fire
+    /// slugs from one root against another).
+    @Published var selectedTaskSlugs: Set<String> = []
+
+    /// Deterministic batch order, so logs and error text are stable.
+    var orderedSelection: [String] { selectedTaskSlugs.sorted() }
+
+    func toggleSelection(_ slug: String) {
+        if selectedTaskSlugs.contains(slug) { selectedTaskSlugs.remove(slug) }
+        else { selectedTaskSlugs.insert(slug) }
+    }
+
+    func clearSelection() { selectedTaskSlugs = [] }
+
     // In-app updates (see Updater.swift).
     let currentVersion = Updater.currentVersion
     /// Set when a newer release exists; drives the footer "Update" affordance.
@@ -94,6 +120,23 @@ final class Store: ObservableObject {
     enum UpdateStatus: Equatable { case idle, installing, failed(String) }
     @Published var updateStatus: UpdateStatus = .idle
     private var lastUpdateCheck: Date?
+
+    /// Homebrew compiled and owns this install, so the app must not swap its own
+    /// bundle — doing so would replace an SDK-native binary with a CI-built one.
+    /// The UI offers the `brew upgrade` command instead of an Install button.
+    var isManagedInstall: Bool { Updater.isManagedInstall }
+
+    /// True when the running OS is newer than the SDK this binary was built
+    /// against — the UI is in compatibility mode and a rebuild would fix it.
+    /// Without this nudge a user who upgrades macOS keeps the stale build forever.
+    var needsSDKRebuild: Bool { AppInfo.isManagedInstall && AppInfo.sdkIsBehindOS }
+
+    /// Copy a shell command to the pasteboard (used by the update affordances).
+    func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        flashResult(.success)
+    }
 
     /// Transient outcome of the last fire-and-forget action (switch / run),
     /// shown briefly on the menubar icon so completion isn't ambiguous.
@@ -146,6 +189,7 @@ final class Store: ObservableObject {
     func endActiveRefresh() {
         activeRefreshTask?.cancel()
         activeRefreshTask = nil
+        selectedTaskSlugs = []
         tasks = []
         metrics = nil
         stats = nil
@@ -162,6 +206,9 @@ final class Store: ObservableObject {
 
     /// Check GitHub for a newer release (throttled to once/hour unless forced).
     func checkForUpdate(force: Bool = false) {
+        // An untagged local build reports 0.0.0-dev, so every release looks
+        // newer — it would nag on every launch. Nothing to update to anyway.
+        guard !AppInfo.isDevBuild else { return }
         if !force, let last = lastUpdateCheck, Date().timeIntervalSince(last) < 3600 { return }
         lastUpdateCheck = Date()
         Task {
@@ -171,7 +218,11 @@ final class Store: ObservableObject {
     }
 
     /// Download + install the available update (app relaunches on success).
+    /// On a Homebrew source install this copies the `brew upgrade` command
+    /// instead — see `Updater`'s type comment for why self-installing is wrong
+    /// there.
     func installUpdate() {
+        if isManagedInstall { copyToPasteboard(Updater.upgradeCommand); return }
         guard let rel = availableUpdate, updateStatus != .installing else { return }
         updateStatus = .installing
         Task {
@@ -507,9 +558,110 @@ final class Store: ObservableObject {
         }
     }
 
+    // MARK: Batch open
+
+    private enum BatchOutcome: Sendable { case ok, alreadyOpen, failed(String) }
+
+    /// Open several tasks at once. All `flow do` calls run in PARALLEL.
+    func switchToAll(_ slugs: [String]) {
+        // Snapshot BEFORE dismissing. `dismissPopover()` synchronously triggers
+        // popoverDidClose -> endActiveRefresh(), which wipes `tasks` AND
+        // `selectedTaskSlugs` — so reading the selection after the dismiss reads
+        // an empty set. This `let` is load-bearing.
+        let batch = slugs
+        guard !batch.isEmpty else { return }
+        // One task: reuse the proven single path (its flash/error handling is
+        // already exactly right, and there is nothing to aggregate).
+        if batch.count == 1 { switchTo(batch[0]); return }
+
+        selectedTaskSlugs = []
+        Self.dismissPopover()
+        spawningOps += batch.count   // counter, so the spinner spans the batch
+
+        Task {
+            var succeeded = 0, alreadyOpen = 0
+            var failures: [(slug: String, message: String)] = []
+
+            await withTaskGroup(of: (String, BatchOutcome).self) { group in
+                for slug in batch {
+                    group.addTask(priority: .userInitiated) {
+                        (slug, await Self.doTaskOffThread(slug))
+                    }
+                }
+                for await (slug, outcome) in group {
+                    self.spawningOps -= 1   // decrement as each lands
+                    switch outcome {
+                    case .ok:            succeeded += 1
+                    case .alreadyOpen:   alreadyOpen += 1
+                    case .failed(let m): failures.append((slug, m))
+                    }
+                }
+            }
+
+            // ONE flash, not N. `flashResult` cancels and restarts its reset
+            // task on every call, so N calls would strobe and end on whichever
+            // spawn happened to finish last.
+            if failures.isEmpty {
+                self.errorText = nil
+                self.flashResult(succeeded == 0 ? .alreadyOpen : .success)
+            } else {
+                self.errorText = Self.batchErrorText(
+                    total: batch.count, opened: succeeded + alreadyOpen, failures: failures)
+                self.flashResult(.failure)
+            }
+        }
+    }
+
+    /// Run the blocking `flow do` off the cooperative thread pool.
+    ///
+    /// `doTask` -> `spawnDisclaimed` blocks on `waitpid`. `Task.detached` still
+    /// runs on the cooperative pool, which is width-limited to roughly the core
+    /// count — so N blocked threads would serialise the "parallel" batch and
+    /// stall `refresh`/`Updater` behind it. GCD overcommits threads for exactly
+    /// this kind of blocking work.
+    ///
+    /// Carries a `String`, not an `Error`: `Result<_, Error>` won't cross the
+    /// concurrency boundary under Swift 6 strict checking.
+    nonisolated private static func doTaskOffThread(_ slug: String) async -> BatchOutcome {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let res = try FlowClient().doTask(slug)
+                    if res.code == 0 { cont.resume(returning: .ok) }
+                    else if isLiveSessionGuard(res.stderr) { cont.resume(returning: .alreadyOpen) }
+                    else { cont.resume(returning: .failed(res.stderr)) }
+                } catch {
+                    cont.resume(returning: .failed(String(describing: error)))
+                }
+            }
+        }
+    }
+
+    nonisolated private static func batchErrorText(
+        total: Int, opened: Int, failures: [(slug: String, message: String)]
+    ) -> String {
+        let names = failures.map(\.slug).joined(separator: ", ")
+        // The most likely cause of a batch failure on a first run, and one the
+        // user cannot guess from a raw stderr dump.
+        if failures.contains(where: { isAutomationDenied($0.message) }) {
+            return "opened \(opened) of \(total). macOS hasn't granted Automation yet — "
+                 + "open one task on its own first, allow the prompt, then try Open all. "
+                 + "(failed: \(names))"
+        }
+        return "opened \(opened) of \(total) — failed: \(names)"
+    }
+
+    /// macOS refused the Apple event. Common when several AppleScript terminal
+    /// spawns race before the Automation grant exists; -1743 is the TCC denial.
+    nonisolated private static func isAutomationDenied(_ stderr: String) -> Bool {
+        let s = stderr.lowercased()
+        return s.contains("-1743") || s.contains("not allowed") || s.contains("not authorized")
+            || s.contains("not permitted")
+    }
+
     /// flow do's live-session guard: the task's session is already running
     /// elsewhere (it names the running session and points at --force).
-    private static func isLiveSessionGuard(_ stderr: String) -> Bool {
+    nonisolated private static func isLiveSessionGuard(_ stderr: String) -> Bool {
         let s = stderr.lowercased()
         return s.contains("--force") || s.contains("already running")
             || s.contains("running session") || s.contains("already open")

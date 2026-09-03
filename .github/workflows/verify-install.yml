@@ -1,0 +1,127 @@
+name: verify-install
+
+# Proves the Homebrew source-install path still works, on every macOS we
+# support. The assertion that matters is #2 below: the installed binary must be
+# linked against the SDK of the machine that built it. If that ever regresses,
+# the whole reason the cask compiles from source is gone and nobody would
+# notice, because the app would still launch and work — just render in
+# compatibility mode.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+
+jobs:
+  install:
+    strategy:
+      # macos-26 may not be available to every account yet. A missing image
+      # should not turn the whole run red.
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Build a tarball shaped exactly like GitHub's tag archive — a single
+      # top-level "<repo>-<version>/" directory. That wrapper is NOT stripped
+      # during staging (UnpackStrategy#extract_nestedly only flattens a single
+      # non-directory child), which is why the cask's paths include it. Testing
+      # against a flat tarball would miss that.
+      - name: Build a GitHub-shaped source tarball
+        id: tarball
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 -E '^\s*version ' Casks/flow-bar.rb | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/dist"
+          TARBALL="$RUNNER_TEMP/dist/flow-bar-src.tar.gz"
+          git ls-files -z | tar --null -T - -czf "$TARBALL" \
+              --transform "s,^,flow-bar-${VERSION}/,"
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(shasum -a 256 "$TARBALL" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Create a local tap pointing at it
+        run: |
+          set -euo pipefail
+          TAP="$(brew --repository)/Library/Taps/pa/homebrew-flowbarci"
+          mkdir -p "$TAP/Casks"
+          python3 - "$TAP/Casks/flow-bar.rb" \
+                    "${{ steps.tarball.outputs.tarball }}" \
+                    "${{ steps.tarball.outputs.sha }}" <<'PY'
+          import pathlib, re, sys
+          out, tarball, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+          s = pathlib.Path("Casks/flow-bar.rb").read_text()
+          s = re.sub(r'  url "[^"]+",\n      verified: "[^"]+"\n',
+                     f'  url "file://{tarball}"\n', s)
+          s = s.replace(
+              'sha256 "0000000000000000000000000000000000000000000000000000000000000000"',
+              f'sha256 "{sha}"')
+          pathlib.Path(out).write_text(s)
+          PY
+          grep -E '^  (url|sha256) ' "$TAP/Casks/flow-bar.rb"
+
+      - name: brew install --cask (compiles from source)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          # This is a throwaway CI tap; skip the interactive trust prompt.
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: brew install --cask pa/flowbarci/flow-bar
+
+      - name: Assert the install
+        run: |
+          set -euo pipefail
+          APP="/Applications/flow-bar.app"
+          BIN="$APP/Contents/MacOS/flow-bar"
+
+          # 1. It installed at all.
+          test -d "$APP" || { echo "::error::$APP missing"; exit 1; }
+
+          # 2. THE ACCEPTANCE TEST. The binary must be linked against this
+          #    machine's SDK, not some older one baked in elsewhere.
+          OS_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
+          SDK_MAJOR="$(otool -l "$BIN" | awk '/LC_BUILD_VERSION/{f=1} f&&/^ *sdk /{print $2; exit}' | cut -d. -f1)"
+          echo "OS major=$OS_MAJOR  SDK major=$SDK_MAJOR"
+          if [ "$SDK_MAJOR" != "$OS_MAJOR" ]; then
+            echo "::error::built against SDK $SDK_MAJOR on macOS $OS_MAJOR — source build is not picking up the local SDK"
+            exit 1
+          fi
+
+          # 3. Signed with the stable local identity, with a hash-pinned DR.
+          #    Without this, macOS drops the Automation grant on every upgrade.
+          codesign -dvv "$APP" 2>&1 | grep -iE 'Authority|Signature' || true
+          codesign -d -r- "$APP" 2>&1 | grep designated
+          if ! codesign -dvv "$APP" 2>&1 | grep -q 'Authority=flow-bar Code Signing'; then
+            echo "::error::not signed with the local identity — Automation grant would not survive upgrades"
+            exit 1
+          fi
+          if ! codesign -d -r- "$APP" 2>&1 | grep -q 'certificate leaf = H'; then
+            echo "::error::designated requirement is not hash-pinned to our cert"
+            exit 1
+          fi
+
+          # 4. Provenance stamped, so the in-app updater knows to stand down.
+          CHANNEL="$(/usr/libexec/PlistBuddy -c 'Print :FBInstallChannel' "$APP/Contents/Info.plist")"
+          test "$CHANNEL" = "homebrew-source" || {
+            echo "::error::FBInstallChannel is '$CHANNEL', expected homebrew-source"; exit 1; }
+
+          # 5. Not quarantined — the bundle is created locally, never downloaded.
+          if xattr -l "$APP" 2>/dev/null | grep -q 'com.apple.quarantine'; then
+            echo "::error::bundle is quarantined; the install would need an xattr dance"
+            exit 1
+          fi
+
+      - name: Assert uninstall is clean
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: |
+          set -euo pipefail
+          brew uninstall --cask pa/flowbarci/flow-bar
+          test ! -e /Applications/flow-bar.app || {
+            echo "::error::/Applications/flow-bar.app survived uninstall"; exit 1; }

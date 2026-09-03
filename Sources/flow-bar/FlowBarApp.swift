@@ -46,6 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // Keep our code identity stable so the Automation (TCC) grant survives
+        // upgrades. If the bundle needs signing this relaunches us, so stop here.
+        if SelfSign.bootstrap() { return }
+
         popover = NSPopover()
         popover.behavior = .transient
         popover.delegate = self
