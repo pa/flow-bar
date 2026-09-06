@@ -250,16 +250,34 @@ public struct FlowClient: Sendable {
     }
 
     /// Decode `flow list tasks ... --format json` into `[FlowTask]`.
+    ///
+    /// **`flow` hides done tasks unless asked.** A drill-in that reports "1
+    /// done" in its header and then shows nothing is worse than not counting
+    /// at all, so any view that displays a total must pass `includeDone`.
+    /// `--include-archived` is separate and equally opt-in.
     public func listTasks(status: String? = nil, tag: String? = nil,
                           project: String? = nil,
+                          includeDone: Bool = false,
                           includeArchived: Bool = false) throws -> [FlowTask] {
+        try decodeJSON([FlowTask].self, Self.listTasksArgs(
+            status: status, tag: tag, project: project,
+            includeDone: includeDone, includeArchived: includeArchived))
+    }
+
+    /// The argv for `listTasks` — split out so the flags a drill-in asks for
+    /// are unit-testable without spawning `flow`.
+    public static func listTasksArgs(status: String? = nil, tag: String? = nil,
+                                     project: String? = nil,
+                                     includeDone: Bool = false,
+                                     includeArchived: Bool = false) -> [String] {
         var args = ["list", "tasks"]
         if let status { args += ["--status", status] }
         if let tag { args += ["--tag", tag] }
         if let project { args += ["--project", project] }
+        if includeDone { args += ["--include-done"] }
         if includeArchived { args += ["--include-archived"] }
         args += ["--format", "json"]
-        return try decodeJSON([FlowTask].self, args)
+        return args
     }
 
     public func inProgressTasks() throws -> [FlowTask] {
@@ -385,10 +403,22 @@ public struct FlowClient: Sendable {
     /// for where a task's files live), then reads those markdown files. Reads
     /// files, never flow.db.
     public func taskDetail(_ slug: String) throws -> TaskDetail {
-        let (data, stderr, code) = try Self.run("flow", ["show", "task", slug])
+        try entityDetail(entity: "task", slug: slug)
+    }
+
+    /// The same brief + `updates/` read for a **playbook definition**.
+    /// `flow show playbook` prints the same `brief:` / `updates:` shape as
+    /// `flow show task`, so it shares the parser and the model — a playbook's
+    /// notes are not second-class to a task's.
+    public func playbookDetail(_ slug: String) throws -> TaskDetail {
+        try entityDetail(entity: "playbook", slug: slug)
+    }
+
+    private func entityDetail(entity: String, slug: String) throws -> TaskDetail {
+        let (data, stderr, code) = try Self.run("flow", ["show", entity, slug])
         guard code == 0 else {
             throw FlowClientError.commandFailed(
-                command: "flow show task \(slug)", code: code, stderr: stderr)
+                command: "flow show \(entity) \(slug)", code: code, stderr: stderr)
         }
         let text = String(data: data, encoding: .utf8) ?? ""
         let paths = Self.parseShowPaths(text)

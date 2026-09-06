@@ -3,6 +3,40 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.3.1 — 2026-09-06
+
+### Fixed — things that looked like they worked
+
+- **Briefs and notes render as real markdown.** Code fences, tables,
+  blockquotes, ordered lists, nested lists and links all used to be dropped or
+  flattened; paragraphs came out ragged because each hard-wrapped source line
+  was laid out as its own line. flow's briefs *are* markdown, and reading them
+  is what flow-bar is for.
+- **You can select text across a whole brief.** Selection previously stopped at
+  the end of whichever line you started on — a drag can now run from the first
+  paragraph, through a code block, and out the other side. Links are clickable,
+  and copying keeps the formatting.
+- **Badge tooltips actually appear.** The hourglass and the stale triangle have
+  declared tooltips for months without ever showing one, and the tooltips now
+  say more: who you're waiting on, and how long a task has been sitting. They
+  also show after a third of a second instead of two seconds.
+- **The green "live" dot means what it says** — that the task's session is
+  genuinely still running, not merely that the task is in progress.
+- **Project and tag drill-ins no longer hide finished work.** A project that
+  reported "1 done" and then showed nothing when you opened it was actively
+  misleading. Done and archived tasks now appear below a labelled separator,
+  underneath the active ones.
+
+### Added
+
+- **Playbooks show their brief and their notes**, rendered exactly like a
+  task's, instead of only a list of runs.
+- **A playbook run opens a real detail view** — its snapshotted brief and its
+  own progress notes — rather than only offering "open in terminal".
+- **Reminders can be set on a playbook run**, the same way as on any task.
+- **A copy button next to the slug** in the task detail header. The slug is the
+  one string you retype constantly.
+
 ## v0.3.0 — 2026-09-04
 
 ### Changed — how flow-bar is installed

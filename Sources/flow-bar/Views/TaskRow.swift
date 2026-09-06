@@ -2,6 +2,14 @@ import FlowBarCore
 import SwiftUI
 
 /// One row in the in-progress list: priority dot, slug + name, status badges.
+///
+/// **Tooltips only fire on views that are not inside a Button's label.** A
+/// plain-styled `Button` is a single platform view, so a `.help()` on an
+/// `Image` within its label has nothing to attach to and never appears — the
+/// badges declared tooltips for months and never showed one. Anything that
+/// needs a tooltip is therefore a sibling of `mainButton` (as the checkbox
+/// already was); anything that must stay inside it — the live dot — gets its
+/// explanation folded into the button's own `rowHelp` instead.
 struct TaskRow: View {
     let task: FlowTask
     let action: () -> Void
@@ -49,7 +57,14 @@ struct TaskRow: View {
             mainButton
                 .disabled(!canOpen)
                 .opacity(canOpen ? 1 : 0.7)
-                .help(canOpen ? "" : "\(task.isArchived ? "Archived" : "Done") — open the brief to review")
+                .helpIfPresent(rowHelp)
+            // Badges sit OUTSIDE mainButton, for the same reason the checkbox
+            // does: a plain-styled Button is a single platform view, so a
+            // `.help()` on something inside its label has nothing to attach a
+            // tooltip to and silently never fires. As siblings they are real
+            // views and their tooltips work. (Their meaning is also folded
+            // into `rowHelp`, so hovering the row body explains them too.)
+            badges
             if let onPeek {
                 Button(action: onPeek) {
                     Image(systemName: "doc.text")
@@ -89,10 +104,15 @@ struct TaskRow: View {
                             .font(.system(size: 15, weight: .semibold))
                             .lineLimit(1)
                         if task.isLive {
+                            // `live` comes from flow itself (`flow list tasks
+                            // --format json`), which resolves it from the
+                            // recorded session's pid — so the dot means "the
+                            // task's harness session is actually running", not
+                            // merely "in progress". Its explanation rides in
+                            // `rowHelp`; a `.help()` here would never fire.
                             Image(systemName: "circle.fill")
                                 .font(.system(size: 8))
                                 .foregroundStyle(.green)
-                                .help("live session")
                         }
                     }
                     HStack(spacing: 6) {
@@ -118,29 +138,6 @@ struct TaskRow: View {
                 }
 
                 Spacer(minLength: 4)
-
-                HStack(spacing: 5) {
-                    if task.isArchived {
-                        badge("archivebox.fill", .orange, help: "archived")
-                    }
-                    if isDone {
-                        badge("checkmark.circle.fill", .green, help: "done")
-                    }
-                    if task.isDueSoon, let label = task.dueLabel {
-                        Text(label)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(task.isOverdue ? .red : .orange)
-                            .lineLimit(1)
-                            .help(task.due.map { "due \($0)" } ?? "due soon")
-                    }
-                    if task.isWaiting {
-                        badge("hourglass", .orange, help: task.waitingOn ?? "waiting")
-                    }
-                    if task.isStale {
-                        badge("exclamationmark.triangle.fill", .yellow,
-                              help: "stale \(task.staleDays ?? 0)d")
-                    }
-                }
             }
             .contentShape(Rectangle())
             .padding(.vertical, 4)
@@ -149,11 +146,72 @@ struct TaskRow: View {
         .buttonStyle(.plain)
     }
 
+    /// Status badges. Each carries its own tooltip; see `body` for why they
+    /// live outside `mainButton`.
+    private var badges: some View {
+        HStack(spacing: 5) {
+            if task.isArchived {
+                badge("archivebox.fill", .orange, help: "archived")
+            }
+            if isDone {
+                badge("checkmark.circle.fill", .green, help: "done")
+            }
+            if task.isDueSoon, let label = task.dueLabel {
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(task.isOverdue ? .red : .orange)
+                    .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .help(dueHelp)
+            }
+            if task.isWaiting {
+                badge("hourglass", .orange, help: waitingHelp)
+            }
+            if task.isStale {
+                badge("exclamationmark.triangle.fill", .yellow, help: staleHelp)
+            }
+        }
+        .padding(.leading, 2)
+    }
+
     private func badge(_ symbol: String, _ color: Color, help: String) -> some View {
         Image(systemName: symbol)
             .font(.system(size: 12))
             .foregroundStyle(color)
+            .frame(width: 16, height: 20)      // a real hover target, not a glyph
+            .contentShape(Rectangle())
             .help(help)
+    }
+
+    private var dueHelp: String {
+        guard let due = task.due else { return "due soon" }
+        return task.isOverdue ? "overdue — was due \(due)" : "due \(due)"
+    }
+
+    private var waitingHelp: String {
+        guard let on = task.waitingOn, !on.isEmpty else { return "waiting" }
+        return "waiting on \(on)"
+    }
+
+    private var staleHelp: String {
+        guard let days = task.staleDays, days > 0 else { return "stale" }
+        return "stale \(days)d — no update in \(days) day\(days == 1 ? "" : "s")"
+    }
+
+    /// The whole row's tooltip: why this row can't be opened, or what its
+    /// badges and its live dot mean. The dot and the badges are drawn inside
+    /// or beside a Button, so this is the one place the live-session state can
+    /// be explained on hover.
+    private var rowHelp: String {
+        guard canOpen else {
+            return "\(task.isArchived ? "Archived" : "Done") — open the brief to review"
+        }
+        var parts: [String] = []
+        if task.isLive { parts.append("live session — its terminal tab is still open") }
+        if task.isWaiting { parts.append(waitingHelp) }
+        if task.isStale { parts.append(staleHelp) }
+        if task.isDueSoon { parts.append(dueHelp) }
+        return parts.joined(separator: " · ")
     }
 
     private var priorityColor: Color {
@@ -162,5 +220,14 @@ struct TaskRow: View {
         case .medium: return .blue
         case .low: return .gray
         }
+    }
+}
+
+private extension View {
+    /// `.help("")` still installs a tooltip owner with no text, which reads as
+    /// a broken tooltip; only attach one when there is something to say.
+    @ViewBuilder
+    func helpIfPresent(_ text: String) -> some View {
+        if text.isEmpty { self } else { help(text) }
     }
 }

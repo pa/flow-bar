@@ -27,7 +27,8 @@ present on this host now, so XCTest *would* work here — don't "fix" the harnes
 on that basis; it exists for the source-install path.) The harness lives in
 `Sources/flowbar-tests` (see `T` in `Harness.swift`) and covers the pure
 `FlowBarCore` logic: model decoding, `filtered`/`sorted` helpers, the
-owners/tags text parsers, and `DashboardMetrics`. Run `swift run flowbar-tests`.
+owners/tags text parsers, `DashboardMetrics`, the markdown block parser,
+and the drill-in list flags/split. Run `swift run flowbar-tests`.
 
 `build-app.sh` produces `flow-bar.app` (gitignored). To relaunch after a
 rebuild, kill the old instance first:
@@ -44,6 +45,9 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
 - **`FlowBarCore`** (library): pure data/logic, no UI.
   - `Models.swift` / `EntityModels.swift` — `FlowTask`, `Project`, `Playbook`,
     `PlaybookRun`, `Owner`, `TagCount`, `DashboardMetrics`.
+  - `Markdown.swift` — block-level markdown parser (headings, paragraphs,
+    lists incl. ordered/nested/checkbox, fenced code, tables, blockquotes,
+    rules). Pure data, no AppKit, so the harness covers it.
   - `FlowClient.swift` — binary discovery (+ a generous PATH so GUI launches
     find `flow`/`claude`), `Process` runner, entity reads (JSON; owners/tags
     via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions.
@@ -68,8 +72,12 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
     pane (per-section global search, header, footer). Sections: `TasksView`
     (home), `InboxView` ("Needs you": owner questions + overdue + waiting),
     `DashboardView` (metric tiles), `ProjectsView` (drill into a project's
-    tasks), `PlaybooksView` (runs + Run), `OwnersView` (questions/tasks +
-    pause/resume). Plus `TaskRow`. (A Team view existed but was removed.)
+    tasks), `PlaybooksView` (brief + notes + runs + Run), `OwnersView`
+    (questions/tasks + pause/resume). Plus `TaskRow`. (A Team view existed
+    but was removed.)
+  - `MarkdownText.swift` — an `NSTextView` (explicit **TextKit 1** stack)
+    rendering `Markdown.parse`'s blocks. Used by task detail, playbook
+    detail, and every update tile.
 - **`flowbar-smoke`** (executable): data-path verification.
 
 ## How "switch to a task" works
@@ -100,6 +108,36 @@ the spawn (hand-rolling a resume can't focus a specific existing tab).
   in `SelfSign.certScript`); CI release builds get `flow-bar-signing`. The cert
   does **not** need to be a trusted root — trust is required to *validate* a
   signature, not to produce one.
+- **Markdown selection needs one text view, not many.** SwiftUI's
+  `.textSelection(.enabled)` selects within a single `Text`; a drag can never
+  span two. The brief pane is therefore one `NSTextView` per block-group
+  (`MarkdownText`), which is also what gives links, formatted `⌘C` and the
+  Services menu. It uses an **explicit TextKit 1 stack** on purpose:
+  `NSTextTable` (which draws code-block, table, quote and rule cells) and
+  `NSLayoutManager.usedRect(for:)` (which `sizeThatFits` measures height with)
+  are both TextKit 1 facilities — let `NSTextView` pick TextKit 2 and
+  `layoutManager` is nil. The accepted trade is that a fenced code block wraps
+  instead of scrolling horizontally; a text view cannot host an
+  independently-scrolling sub-region.
+- **`AttributedString(markdown:)` emphasis is invisible to AppKit.** It reports
+  bold/italic/code as `inlinePresentationIntent`, which SwiftUI's `Text`
+  understands and `NSTextView` does not. `MarkdownRenderer.inline` translates
+  each run's intent into a concrete `NSFont`; drop that and every run silently
+  renders at the base weight.
+- **A `.help()` inside a Button's label never fires.** A plain-styled `Button`
+  is one platform view, so a tooltip declared on an `Image`/`Text` within its
+  label has nothing to attach to. Put anything that needs a tooltip *beside*
+  the button (see `TaskRow.badges`), or fold its text into the button's own
+  `.help()`. Also avoid `.help("")` — an empty tooltip owner is worse than
+  none.
+- **`flow list tasks` hides done tasks** unless given `--include-done`, and
+  archived ones unless given `--include-archived`. Any view that shows a count
+  and then a list must pass both, or it contradicts its own header — that's
+  what `FlowClient.listTasksArgs` exists to make testable.
+- **Liveness is flow's to report, not flow-bar's.** `flow list tasks --format
+  json` emits `live` (resolved from the recorded session's pid), so the green
+  dot means "the harness session is actually running", not "in progress". Do
+  not reimplement local tab detection; `FlowTask.live` is the source of truth.
 - `flow owner list` and `flow list tags` are **text, not JSON** — parsed by
   `FlowClient.listOwners`/`listTags`. If their output format changes, update
   those parsers.

@@ -78,16 +78,30 @@ struct TaskDetailView: View {
     }
 
     @State private var copied = false
+    @State private var slugCopied = false
 
     private func copyBrief(_ text: String) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(text, forType: .string)
+        write(text)
         copied = true
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             copied = false
         }
+    }
+
+    private func copySlug(_ slug: String) {
+        write(slug)
+        slugCopied = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            slugCopied = false
+        }
+    }
+
+    private func write(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
     }
 
     @ViewBuilder
@@ -101,8 +115,23 @@ struct TaskDetailView: View {
                     Text(d.name)
                         .font(.system(size: 17, weight: .bold))
                         .textSelection(.enabled)
-                    Text(d.slug)
-                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                    // The slug is the one string you retype constantly (it's
+                    // how every flow command names a task), so it gets its own
+                    // copy button rather than relying on selecting the text.
+                    HStack(spacing: 5) {
+                        Text(d.slug)
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Button(action: { copySlug(d.slug) }) {
+                            Image(systemName: slugCopied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 11))
+                                .foregroundStyle(slugCopied ? Color.green : Color.secondary)
+                                .frame(width: 18, height: 18)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(slugCopied ? "Copied" : "Copy the slug")
+                    }
 
                     if d.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         emptyNote("No brief written for this task yet.")
@@ -160,79 +189,5 @@ struct TaskDetailView: View {
 
     private func emptyNote(_ text: String) -> some View {
         Text(text).font(.system(size: 14)).foregroundStyle(.secondary)
-    }
-}
-
-/// Minimal, dependency-free markdown renderer sufficient for flow briefs/updates:
-/// headings (#, ##, ###), bullets, task checkboxes, and inline emphasis/code.
-/// (macOS 13's SwiftUI has no block-markdown view; full engines are overkill
-/// for a menubar peek.) Inline styling uses AttributedString's markdown parser.
-struct MarkdownText: View {
-    let source: String
-    init(_ source: String) { self.source = source }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                row(for: line)
-            }
-        }
-        .textSelection(.enabled)
-    }
-
-    private var lines: [String] { source.components(separatedBy: "\n") }
-
-    @ViewBuilder
-    private func row(for raw: String) -> some View {
-        let line = raw.trimmingCharacters(in: CharacterSet(charactersIn: " "))
-        if line.isEmpty {
-            Spacer().frame(height: 3)
-        } else if line.hasPrefix("### ") {
-            Text(String(line.dropFirst(4)))
-                .font(.system(size: 14, weight: .semibold))
-                .padding(.top, 2)
-        } else if line.hasPrefix("## ") {
-            Text(String(line.dropFirst(3)))
-                .font(.system(size: 15, weight: .bold))
-                .padding(.top, 3)
-        } else if line.hasPrefix("# ") {
-            Text(String(line.dropFirst(2)))
-                .font(.system(size: 17, weight: .bold))
-                .padding(.top, 3)
-        } else if let box = checkbox(line) {
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: box.done ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 13))
-                    .foregroundStyle(box.done ? Theme.accent : .secondary)
-                inline(box.text)
-            }
-        } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
-            HStack(alignment: .top, spacing: 6) {
-                Text("•").font(.system(size: 15)).foregroundStyle(.secondary)
-                inline(String(line.dropFirst(2)))
-            }
-        } else {
-            inline(line)
-        }
-    }
-
-    /// "- [x] text" / "- [ ] text" -> (done, text); nil if not a checkbox.
-    private func checkbox(_ line: String) -> (done: Bool, text: String)? {
-        for (prefix, done) in [("- [x] ", true), ("- [X] ", true), ("- [ ] ", false)] {
-            if line.hasPrefix(prefix) { return (done, String(line.dropFirst(prefix.count))) }
-        }
-        return nil
-    }
-
-    /// Render one line's inline markdown (bold/italic/code), preserving text.
-    private func inline(_ text: String) -> some View {
-        let attributed = (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
-        return Text(attributed)
-            .font(.system(size: 14))
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

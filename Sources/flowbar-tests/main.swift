@@ -6,10 +6,11 @@ import Foundation
 func task(_ slug: String, name: String = "", status: String = "in-progress",
           priority: String = "medium", project: String? = nil, stale: Bool? = nil,
           live: Bool? = nil, waitingOn: String? = nil, dueInDays: Int? = nil,
-          tags: [String]? = nil, updated: String? = nil) -> FlowTask {
+          tags: [String]? = nil, updated: String? = nil,
+          archived: Bool? = nil) -> FlowTask {
     FlowTask(slug: slug, name: name, status: status, priority: priority,
              project: project, stale: stale, waitingOn: waitingOn, live: live,
-             updated: updated, tags: tags, dueInDays: dueInDays)
+             updated: updated, tags: tags, dueInDays: dueInDays, archived: archived)
 }
 
 // MARK: - Model decoding
@@ -549,5 +550,149 @@ T.equal(goneSum.hidden, 1, "unknown slug counts as hidden")
 
 // Batch order is deterministic so error text is stable across runs.
 T.equal(Set(["c", "a", "b"]).sorted(), ["a", "b", "c"], "batch order is deterministic")
+
+print("Markdown blocks")
+
+// flow briefs are hard-wrapped at ~72 columns, so a paragraph arrives as
+// several source lines. Re-joining them is the whole reason the old per-line
+// renderer produced ragged text.
+T.equal(Markdown.parse("""
+one two
+three four
+
+next para
+"""),
+        [.paragraph("one two three four"), .paragraph("next para")],
+        "soft-wrapped lines join into one paragraph")
+
+T.equal(Markdown.parse("# Title\n## Sub\n### Deep"),
+        [.heading(level: 1, text: "Title"),
+         .heading(level: 2, text: "Sub"),
+         .heading(level: 3, text: "Deep")],
+        "ATX headings by level")
+
+// "#hashtag" is not a heading — a heading needs the space.
+T.equal(Markdown.parse("#flow is a tag"), [.paragraph("#flow is a tag")],
+        "no space after # is not a heading")
+
+let fenced = Markdown.parse("""
+before
+
+```sh
+swift build
+swift run flowbar-tests
+```
+
+after
+""")
+T.equal(fenced, [.paragraph("before"),
+                 .code(language: "sh", code: "swift build\nswift run flowbar-tests"),
+                 .paragraph("after")],
+        "fenced code keeps its language and its own line breaks")
+
+// An unterminated fence runs to end of input rather than swallowing nothing.
+T.equal(Markdown.parse("```\nstuck"), [.code(language: nil, code: "stuck")],
+        "unterminated fence still yields a code block")
+
+// A tilde fence must not be closed by a backtick fence.
+T.equal(Markdown.parse("~~~\na ``` b\n~~~"),
+        [.code(language: nil, code: "a ``` b")],
+        "tilde fence ignores backticks inside")
+
+T.equal(Markdown.parse("""
+| a | b |
+|---|---|
+| 1 | 2 |
+| 3 | 4 |
+"""),
+        [.table(header: ["a", "b"], rows: [["1", "2"], ["3", "4"]])],
+        "pipe table with header and rows")
+
+// A pipe line without a delimiter row underneath is just prose.
+T.equal(Markdown.parse("a | b"), [.paragraph("a | b")],
+        "pipes without a delimiter row are not a table")
+
+T.equal(Markdown.parse("> quoted\n> still quoted\n\nout"),
+        [.quote("quoted still quoted"), .paragraph("out")],
+        "blockquote joins its lines")
+T.equal(Markdown.parse("> one\n>\n> two"),
+        [.quote("one\n\ntwo")],
+        "a bare > is a paragraph break inside the quote")
+
+T.equal(Markdown.parse("""
+- top
+  - nested
+- [x] done
+- [ ] todo
+1. first
+2) second
+"""),
+        [.listItem(indent: 0, kind: .bullet, text: "top"),
+         .listItem(indent: 1, kind: .bullet, text: "nested"),
+         .listItem(indent: 0, kind: .checkbox(true), text: "done"),
+         .listItem(indent: 0, kind: .checkbox(false), text: "todo"),
+         .listItem(indent: 0, kind: .ordered(1), text: "first"),
+         .listItem(indent: 0, kind: .ordered(2), text: "second")],
+        "bullets, nesting, checkboxes and ordered markers")
+
+// A wrapped list item's continuation lines belong to the item, not to a new
+// paragraph — every "Done when" bullet in a flow brief looks like this.
+T.equal(Markdown.parse("- item text that\n  wraps onto a second line\n\nafter"),
+        [.listItem(indent: 0, kind: .bullet, text: "item text that wraps onto a second line"),
+         .paragraph("after")],
+        "list continuation lines fold into the item")
+
+T.equal(Markdown.parse("above\n\n---\n\nbelow"),
+        [.paragraph("above"), .rule, .paragraph("below")],
+        "--- is a horizontal rule")
+// The table delimiter row contains pipes, so it must never read as a rule.
+T.equal(Markdown.parse("| h |\n|---|\n| v |"),
+        [.table(header: ["h"], rows: [["v"]])],
+        "delimiter row is not mistaken for a rule")
+
+// Inline markup is deliberately left in the text for the renderer to parse.
+T.equal(Markdown.parse("some **bold** and `code`"),
+        [.paragraph("some **bold** and `code`")],
+        "inline syntax is preserved verbatim in the block text")
+
+T.equal(Markdown.parse(""), [], "empty input yields no blocks")
+T.equal(Markdown.parse("\n\n  \n"), [], "whitespace-only input yields no blocks")
+
+print("Done & archived drill-ins")
+
+// flow hides done tasks unless asked, and archived ones separately. A project
+// row advertises a done count, so the drill-in must ask for both or it
+// contradicts its own header.
+T.equal(FlowClient.listTasksArgs(project: "flow-bar", includeDone: true, includeArchived: true),
+        ["list", "tasks", "--project", "flow-bar",
+         "--include-done", "--include-archived", "--format", "json"],
+        "project drill-in asks for done + archived")
+T.equal(FlowClient.listTasksArgs(tag: "swift", includeDone: true, includeArchived: true),
+        ["list", "tasks", "--tag", "swift",
+         "--include-done", "--include-archived", "--format", "json"],
+        "tag drill-in asks for done + archived")
+// The polled in-progress list must NOT start dragging in done rows.
+T.equal(FlowClient.listTasksArgs(status: "in-progress"),
+        ["list", "tasks", "--status", "in-progress", "--format", "json"],
+        "in-progress poll is unchanged")
+
+let drillIn = [
+    task("done-high", status: "done", priority: "high"),
+    task("live-low", status: "in-progress", priority: "low"),
+    task("backlog-high", status: "backlog", priority: "high"),
+    task("archived-one", status: "in-progress", priority: "high", archived: true),
+]
+let split = drillIn.splitByActivity()
+T.equal(split.active.map(\.slug), ["live-low", "backlog-high"],
+        "active keeps in-progress before backlog")
+T.equal(split.finished.map(\.slug), ["archived-one", "done-high"],
+        "finished collects done AND archived")
+T.expect(!split.isEmpty, "a split with rows is not empty")
+T.expect([FlowTask]().splitByActivity().isEmpty, "an empty list splits to empty")
+
+// An archived in-progress task is finished, not active — `flow do` can't act
+// on it, which is exactly the line the separator draws.
+T.equal([task("a", status: "in-progress", archived: true)].splitByActivity().active.count, 0,
+        "archived never counts as active")
 
 T.summarize()

@@ -19,6 +19,28 @@ enum StatusStyle {
     }
 }
 
+/// The labelled divider that separates finished (done/archived) rows from the
+/// live ones in a drill-in list. Shared by the Projects and Tags views so both
+/// drill-ins read identically.
+struct FinishedSeparator: View {
+    let count: Int
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("DONE & ARCHIVED")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.tertiary)
+            Text("\(count)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.tertiary)
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(height: 1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 10).padding(.bottom, 4)
+    }
+}
+
 /// A small colored capsule showing a task/run status.
 struct StatusPill: View {
     let status: String
