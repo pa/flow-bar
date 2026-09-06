@@ -46,6 +46,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // Show tooltips after ~350ms instead of AppKit's ~2s default.
+        //
+        // Every tooltip in this app explains a glyph the user is already
+        // pointing at (a badge, a live dot, a disabled row), and all of the
+        // text is computed from data we already hold — no work happens on
+        // hover, so the stock delay is pure latency. `NSInitialToolTipDelay`
+        // is undocumented but long-standing; `register` scopes it to this app
+        // and lets a real user default still win.
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 350])
+
         // Keep our code identity stable so the Automation (TCC) grant survives
         // upgrades. If the bundle needs signing this relaunches us, so stop here.
         if SelfSign.bootstrap() { return }

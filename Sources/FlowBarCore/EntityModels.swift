@@ -248,6 +248,32 @@ public extension Array where Element == FlowTask {
     }
 }
 
+/// A drill-in list split into what's still live and what's finished.
+public struct TaskActivitySplit: Equatable, Sendable {
+    public var active: [FlowTask]     // in-progress, then backlog
+    public var finished: [FlowTask]   // done or archived
+    public var isEmpty: Bool { active.isEmpty && finished.isEmpty }
+    public init(active: [FlowTask], finished: [FlowTask]) {
+        self.active = active; self.finished = finished
+    }
+}
+
+public extension Array where Element == FlowTask {
+    /// Split a drill-in list into active vs. finished rows, each sorted the
+    /// usual way.
+    ///
+    /// Project and tag drill-ins now ask flow for done + archived tasks (their
+    /// headers advertise those counts, so omitting the rows made the drill-in
+    /// contradict itself). Interleaving them would bury the live work, so they
+    /// sort below a labelled separator instead. "Finished" is `canOpen`'s
+    /// inverse — exactly the rows `flow do` cannot act on.
+    func splitByActivity() -> TaskActivitySplit {
+        TaskActivitySplit(
+            active: filter(\.canOpen).sortedByStatusThenPriority(),
+            finished: filter { !$0.canOpen }.sortedByStatusThenPriority())
+    }
+}
+
 /// How the task list is ordered. Lives here (not in the app target) so the list
 /// and the Enter-to-open shortcut can share one definition of "what's visible".
 public enum TaskListSort: String, Sendable, CaseIterable {

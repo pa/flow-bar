@@ -99,16 +99,18 @@ struct ProjectsView: View {
             if store.projectTasksLoading {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                let tasks = store.projectTasks.filtered(by: query).sortedByStatusThenPriority()
-                if tasks.isEmpty {
+                let split = store.projectTasks.filtered(by: query).splitByActivity()
+                if split.isEmpty {
                     Text(query.isEmpty ? "No tasks" : "No matches")
                         .font(.system(size: 14)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(tasks) { t in
-                                TaskRow(task: t, action: { store.switchTo(t.slug) }, onPeek: { store.peekBrief(t.slug) }, onRemind: { store.beginReminder(for: t) }, showStatus: true, showProject: false)
+                            ForEach(split.active) { t in row(t) }
+                            if !split.finished.isEmpty {
+                                FinishedSeparator(count: split.finished.count)
+                                ForEach(split.finished) { t in row(t).opacity(0.75) }
                             }
                         }
                         .padding(.vertical, 4)
@@ -116,6 +118,13 @@ struct ProjectsView: View {
                 }
             }
         }
+    }
+
+    private func row(_ t: FlowTask) -> some View {
+        TaskRow(task: t, action: { store.switchTo(t.slug) },
+                onPeek: { store.peekBrief(t.slug) },
+                onRemind: { store.beginReminder(for: t) },
+                showStatus: true, showProject: false)
     }
 
     private func priorityColor(_ p: String) -> Color {

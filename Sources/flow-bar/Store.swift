@@ -259,6 +259,7 @@ final class Store: ObservableObject {
         browseTasks = []
         playbooks = []
         runs = []
+        clearPlaybookDetail()
         reminderLinkTasks = []
     }
 
@@ -417,6 +418,35 @@ final class Store: ObservableObject {
     @Published var runs: [PlaybookRun] = []
     @Published var playbooksLoading = false
 
+    // The drilled-into playbook's own brief + updates/ notes. Same shape as a
+    // task's detail (see `FlowClient.playbookDetail`).
+    @Published var playbookDetail: TaskDetail?
+    @Published var playbookDetailLoading = false
+    private var playbookDetailSlug: String?
+
+    /// Load a playbook definition's brief + update notes for the detail view.
+    func loadPlaybookDetail(_ slug: String) {
+        playbookDetailSlug = slug
+        playbookDetail = nil
+        playbookDetailLoading = true
+        Task {
+            let d = try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().playbookDetail(slug)
+            }.value
+            // Ignore a response for a playbook the user has already left.
+            guard self.playbookDetailSlug == slug else { return }
+            self.playbookDetail = d
+            self.playbookDetailLoading = false
+        }
+    }
+
+    /// Clear the playbook detail when the user returns to the list.
+    func clearPlaybookDetail() {
+        playbookDetailSlug = nil
+        playbookDetail = nil
+        playbookDetailLoading = false
+    }
+
     // Tasks managed by a drilled-into owner.
     @Published var ownerTasks: [FlowTask] = []
     @Published var ownerTasksLoading = false
@@ -504,13 +534,17 @@ final class Store: ObservableObject {
     /// Set by a dashboard top-tag tap so the Tags section opens pre-drilled.
     @Published var pendingTagDrill: String?
 
-    /// Load all tasks carrying a given tag (any status) for the Tags drill-in.
+    /// Load all tasks carrying a given tag for the Tags drill-in.
+    ///
+    /// Done and archived tasks are included: the tag list shows a count, and a
+    /// drill-in that shows fewer rows than its own count is misleading. The
+    /// view separates them below the active ones.
     func loadTagTasks(_ tag: String) {
         tagTasksLoading = true
         tagTasks = []
         Task {
             let r = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(tag: tag)
+                try FlowClient().listTasks(tag: tag, includeDone: true, includeArchived: true)
             }.value) ?? []
             self.tagTasks = r
             self.tagTasksLoading = false
@@ -541,13 +575,16 @@ final class Store: ObservableObject {
         }
     }
 
-    /// Load all tasks under a project (any status) for the Projects drill-in.
+    /// Load all tasks under a project for the Projects drill-in.
+    ///
+    /// Includes done + archived — the project row advertises a done count, so
+    /// hiding those rows made the drill-in contradict its own header.
     func loadProjectTasks(_ slug: String) {
         projectTasksLoading = true
         projectTasks = []
         Task {
             let result = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(project: slug)
+                try FlowClient().listTasks(project: slug, includeDone: true, includeArchived: true)
             }.value) ?? []
             self.projectTasks = result
             self.projectTasksLoading = false
