@@ -1,8 +1,8 @@
 cask "flow-bar" do
-  version "0.3.0"
+  version "0.3.1"
   # sha256 of the SOURCE TARBALL (not a release zip). release.yml computes it
   # with `curl -sL <url> | shasum -a 256` and rewrites this line on every tag.
-  sha256 "c1d8f9f69c19680111f57d31ce4d7f0f272d032c985bb557be4143c25294782a"
+  sha256 "13f3da65a74c649e414b1206cd4041e5d0ac85c8923c20646e8c8f4774f12238"
 
   url "https://github.com/pa/flow-bar/archive/refs/tags/v#{version}.tar.gz",
       verified: "github.com/pa/flow-bar/"
