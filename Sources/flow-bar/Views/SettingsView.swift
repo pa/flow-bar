@@ -150,17 +150,24 @@ struct SettingsView: View {
                 .font(.system(size: 12)).foregroundStyle(.red).help(msg)
         case .idle:
             if let up = store.availableUpdate, store.isManagedInstall {
-                // Homebrew owns this install — self-installing a CI-built zip
-                // would replace the natively-compiled binary. Hand over the
-                // command instead, selectable so it can be copied by hand too.
+                // Homebrew owns this install, so brew does the rebuild — but
+                // it's still one button. Self-installing the released zip here
+                // would kill the Automation grant and de-nativise the UI; see
+                // BrewUpgrade for why.
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("v\(up.version) is available")
+                    Button("Update to v\(up.version)") { store.installUpdate() }
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.accent)
+                    Text("flow-bar quits, Homebrew rebuilds it for your macOS, and it "
+                         + "reopens when it's done — about a minute.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    // Still offered verbatim: some people would rather watch it
+                    // run in their own terminal than trust a silent rebuild.
                     HStack(spacing: 8) {
                         Text(Updater.upgradeCommand)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 10, design: .monospaced))
                             .textSelection(.enabled)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
                         Button("Copy") { store.copyToPasteboard(Updater.upgradeCommand) }
                             .font(.system(size: 11)).buttonStyle(.link)
                     }

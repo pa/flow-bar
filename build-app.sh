@@ -78,7 +78,36 @@ EOF
     exit 1
 fi
 
-SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || echo unknown)"
+# Which macOS SDK this build links against.
+#
+# This is load-bearing, not cosmetic: SwiftUI picks its appearance from the SDK
+# a binary was linked against, so it's what decides whether the app looks native
+# (see "Distribution" in CLAUDE.md). It's stamped into Info.plist as FBBuildSDK
+# so the app can tell the user when a rebuild is due.
+#
+# `xcrun --show-sdk-version` on its own is NOT reliable. On a machine with Xcode
+# selected it can still resolve to the Command Line Tools SDK path and fail
+# outright ("unable to lookup item 'SDKVersion'"), which used to fall through to
+# "unknown" — silently disabling the very rebuild nudge this value exists for.
+# So: ask for the macosx SDK explicitly, then fall back to the bare form, then
+# to the OS version, which on a CLT-only machine is the closest honest answer.
+detect_sdk_version() {
+    local v
+    v="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null)" && [ -n "$v" ] && { printf '%s' "$v"; return; }
+    v="$(xcrun --show-sdk-version 2>/dev/null)" && [ -n "$v" ] && { printf '%s' "$v"; return; }
+    v="$(sw_vers -productVersion 2>/dev/null)" && [ -n "$v" ] && { printf '%s' "$v"; return; }
+    printf 'unknown'
+}
+
+# What the linked binary actually records, which beats any guess: the same
+# LC_BUILD_VERSION field `.github/workflows/verify-install.yml` asserts on.
+sdk_from_binary() {
+    [ -f "$1" ] || return 1
+    otool -l "$1" 2>/dev/null \
+        | awk '/LC_BUILD_VERSION/ {f=1; next} f && $1=="sdk" {print $2; exit}'
+}
+
+SDK_VERSION="$(detect_sdk_version)"
 echo "==> toolchain: $(swift --version 2>/dev/null | head -1)"
 echo "==> macOS SDK: ${SDK_VERSION}"
 
@@ -145,6 +174,14 @@ plist_set_string() {
     /usr/libexec/PlistBuddy -c "Add :$1 string $2" "${PLIST}"
 }
 plist_set_string FBInstallChannel "${CHANNEL}"
+# Prefer what the binary itself records over what the toolchain claimed: it's
+# the ground truth for appearance, and it's available now that linking is done.
+if BIN_SDK="$(sdk_from_binary "${APP}/Contents/MacOS/flow-bar")" && [ -n "${BIN_SDK}" ]; then
+    if [ "${BIN_SDK}" != "${SDK_VERSION}" ]; then
+        echo "==> SDK from linked binary: ${BIN_SDK} (toolchain said ${SDK_VERSION})"
+    fi
+    SDK_VERSION="${BIN_SDK}"
+fi
 plist_set_string FBBuildSDK "${SDK_VERSION}"
 
 echo "==> version ${VERSION}  channel ${CHANNEL}  sdk ${SDK_VERSION}"

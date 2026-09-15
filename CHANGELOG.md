@@ -3,6 +3,28 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.4.1 — 2026-09-15
+
+### Fixed
+
+- **Updating from the app works again on a Homebrew install.** It used to hand
+  you a command to paste; now it's one click. flow-bar quits, Homebrew rebuilds
+  it for your macOS, and it reopens when it's done. It deliberately does *not*
+  install the prebuilt download over a source install — that would change the
+  code signature and silently cost you the macOS Automation grant that `flow do`
+  needs, and link the app against an older SDK so the UI stopped looking native.
+  Delegating to `brew` avoids all of it and keeps Homebrew's own records honest.
+- **The offered upgrade command could find nothing.** flow-bar lives in a
+  third-party tap, and `brew upgrade` only sees a new version once that tap has
+  been refreshed — which Homebrew skips if it auto-updated recently. So the app
+  would tell you an update existed and then hand you a command that reported
+  you were up to date. It now refreshes the tap first.
+- **"Built for macOS … SDK" said nothing useful.** The build stamped `unknown`
+  whenever `xcrun --show-sdk-version` failed, which it does on a machine where
+  Xcode is selected but the Command Line Tools SDK is absent. That silently
+  disabled the nudge that tells you a rebuild is due after a macOS upgrade —
+  the one warning that a build has stopped being native to your OS.
+
 ## v0.4.0 — 2026-09-15
 
 ### Added — flow-bar tells you when a session is stuck

@@ -3,6 +3,47 @@ import Foundation
 
 // Phase 1 smoke test: prove the flow -> JSON -> Codable path works end to end.
 // Run with:  swift run flowbar-smoke
+//
+// Two self-contained checks live behind flags, because they are the parts of
+// the self-upgrade that unit tests cannot reach:
+//
+//   --upgrade-script   print the brew self-upgrade script, so it can be piped
+//                      through `sh -n`. It is built by string interpolation and
+//                      only ever runs when the app is quitting, which is the
+//                      worst possible time to discover a syntax error.
+//   --detach-test      prove a detached child outlives this process. The whole
+//                      upgrade depends on it: brew quits flow-bar partway
+//                      through, and an ordinary child would die with it.
+
+if CommandLine.arguments.contains("--upgrade-script") {
+    print(BrewUpgrade.script(
+        appPath: "/Applications/flow-bar.app",
+        bundleID: "cloud.facets.flow-bar",
+        logPath: NSHomeDirectory() + "/Library/Logs/flow-bar-upgrade.log",
+        markerPath: NSHomeDirectory() + "/Library/Application Support/flow-bar/last-upgrade",
+        processMatch: "flow-bar.app/Contents/MacOS/flow-bar"))
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--detach-test") {
+    let dir = NSTemporaryDirectory() + "flowbar-detach-\(ProcessInfo.processInfo.processIdentifier)"
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    let script = dir + "/child.sh"
+    let marker = dir + "/survived"
+    // Sleeps past this process's own exit, then reports. If the child were tied
+    // to our lifetime, the marker would never appear.
+    try? """
+    #!/bin/sh
+    sleep 3
+    printf 'survived parent exit' > \(BrewUpgrade.shellQuote(marker))
+    """.write(toFile: script, atomically: true, encoding: .utf8)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+    let ok = FlowClient.spawnDetached(script, logPath: dir + "/child.log")
+    print("spawned=\(ok)")
+    print("marker=\(marker)")
+    print("parent exiting now; check the marker in ~4s")
+    exit(ok ? 0 : 1)
+}
 
 let client = FlowClient()
 

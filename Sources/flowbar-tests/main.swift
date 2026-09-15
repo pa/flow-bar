@@ -1126,6 +1126,97 @@ T.test("harness labels") {
     T.equal(TranscriptFormat.allCases.count, 2, "both harnesses flow can bootstrap")
 }
 
+print("\nBrewUpgrade — the self-upgrade script")
+
+let upgradeScript = BrewUpgrade.script(
+    appPath: "/Applications/flow-bar.app",
+    bundleID: "cloud.facets.flow-bar",
+    logPath: "/Users/me/Library/Logs/flow-bar-upgrade.log",
+    markerPath: "/Users/me/Library/Application Support/flow-bar/last-upgrade",
+    processMatch: "flow-bar.app/Contents/MacOS/flow-bar")
+
+T.test("it refreshes the tap before upgrading") {
+    // Without this the command is a lie: with a stale tap, `brew outdated`
+    // reported nothing while a new version was already published.
+    let pullAt = upgradeScript.range(of: "git -C \"$TAP_REPO\" pull --ff-only")
+    let upgradeAt = upgradeScript.range(of: "brew upgrade --cask flow-bar")
+    T.expect(pullAt != nil, "pulls the tap")
+    T.expect(upgradeAt != nil, "upgrades the cask")
+    if let p = pullAt, let u = upgradeAt {
+        T.expect(p.lowerBound < u.lowerBound, "and pulls BEFORE upgrading")
+    }
+}
+
+T.test("it always records an outcome, success or failure") {
+    // The app is not running when the result is known, so the marker is the
+    // only channel back. A path that writes nothing would look like "no upgrade
+    // ever ran" and the failure would vanish.
+    T.expect(upgradeScript.contains("printf 'ok' > \"$MARKER\""), "ok marker")
+    T.expect(upgradeScript.contains("printf 'failed' > \"$MARKER\""), "failed marker")
+    T.equal(upgradeScript.components(separatedBy: "printf 'failed'").count - 1, 2,
+            "failed is written for a brew failure AND for a missing brew")
+}
+
+T.test("it relaunches the app on every path") {
+    // Relaunching is both the recovery and the only progress signal the user
+    // gets, so no branch may exit without it — including the brew-not-found one.
+    let relaunches = upgradeScript.components(separatedBy: "open -a \"$APP\"").count - 1
+    T.equal(relaunches, 2, "relaunched after the upgrade and after an early exit")
+    T.expect(upgradeScript.contains("open -b 'cloud.facets.flow-bar'"),
+             "falls back to the bundle id if the path moved")
+}
+
+T.test("it waits for the old app to exit") {
+    // flow-bar quits itself so brew's AppleScript `quit` has nothing to do,
+    // which is what keeps the upgrade off the Automation grant. Racing it would
+    // put that back.
+    T.expect(upgradeScript.contains("pgrep -f 'flow-bar.app/Contents/MacOS/flow-bar'"),
+             "polls for the old process")
+    T.expect(upgradeScript.contains("-lt 30"), "with a bounded wait, not forever")
+}
+
+T.test("it sets a PATH, because a GUI parent gives it almost none") {
+    T.expect(upgradeScript.contains("PATH=/opt/homebrew/bin:/usr/local/bin"), "homebrew on PATH")
+    T.expect(upgradeScript.contains("command -v brew"), "and checks brew is really there")
+}
+
+T.test("paths are quoted, so a space or apostrophe can't break the script") {
+    let s = BrewUpgrade.script(
+        appPath: "/Users/o'brien/My Apps/flow-bar.app",
+        bundleID: "cloud.facets.flow-bar",
+        logPath: "/Users/o'brien/Library/Logs/up.log",
+        markerPath: "/Users/o'brien/Library/Application Support/flow-bar/last-upgrade",
+        processMatch: "flow-bar")
+    // "Application Support" always has a space; an apostrophe in a home
+    // directory name is unusual but entirely legal.
+    T.expect(s.contains("'/Users/o'\\''brien/My Apps/flow-bar.app'"), "apostrophe escaped")
+    T.expect(s.contains("'/Users/o'\\''brien/Library/Application Support/flow-bar/last-upgrade'"),
+             "space-bearing path quoted whole")
+}
+
+T.test("shellQuote") {
+    T.equal(BrewUpgrade.shellQuote("plain"), "'plain'", "wraps")
+    T.equal(BrewUpgrade.shellQuote("a b"), "'a b'", "space needs no escaping inside quotes")
+    T.equal(BrewUpgrade.shellQuote("it's"), "'it'\\''s'", "apostrophe closes, escapes, reopens")
+    T.equal(BrewUpgrade.shellQuote(""), "''", "empty")
+    T.equal(BrewUpgrade.shellQuote("$(rm -rf /)"), "'$(rm -rf /)'",
+            "single quotes make substitution inert")
+}
+
+T.test("the manual command matches what the script does") {
+    // The copy-to-clipboard fallback must not drift from the automated path.
+    T.expect(BrewUpgrade.manualCommand.contains("brew --repository pa/flow-bar"), "same tap")
+    T.expect(BrewUpgrade.manualCommand.contains("pull --ff-only"), "same refresh")
+    T.expect(BrewUpgrade.manualCommand.contains("brew upgrade --cask flow-bar"), "same upgrade")
+}
+
+T.test("the result marker round-trips") {
+    T.equal(BrewUpgrade.Result(rawValue: "ok"), .ok, "ok")
+    T.equal(BrewUpgrade.Result(rawValue: "failed"), .failed, "failed")
+    T.expect(BrewUpgrade.Result(rawValue: "") == nil, "empty is not a verdict")
+    T.expect(BrewUpgrade.Result(rawValue: "garbage") == nil, "nor is anything else")
+}
+
 print("\nClaudeHookConfig — splicing a file we don't own")
 
 /// A settings.json shaped like the real one on this machine: other people's

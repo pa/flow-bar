@@ -322,17 +322,51 @@ final class Store: ObservableObject {
         }
     }
 
-    /// Download + install the available update (app relaunches on success).
-    /// On a Homebrew source install this copies the `brew upgrade` command
-    /// instead — see `Updater`'s type comment for why self-installing is wrong
-    /// there.
+    /// Install the available update. The app quits and comes back either way.
+    ///
+    /// Two different mechanisms, because the right answer depends on how the app
+    /// got here. A `.dmg`/`.zip` install swaps in the released bundle. A
+    /// Homebrew source install instead **runs `brew upgrade` for you** — one
+    /// click, same as the other path, but the work is done by brew so the build
+    /// stays native and keeps this machine's signing identity. Installing the
+    /// released zip over a source install would silently kill the Automation
+    /// grant and de-nativise the UI; see `BrewUpgrade` for the full reasoning.
     func installUpdate() {
-        if isManagedInstall { copyToPasteboard(Updater.upgradeCommand); return }
-        guard let rel = availableUpdate, updateStatus != .installing else { return }
+        guard updateStatus != .installing else { return }
+        if isManagedInstall {
+            updateStatus = .installing
+            if !BrewUpgradeRunner.start() {
+                // Never quit on a failed launch — that would leave nothing
+                // running and nothing explaining why.
+                updateStatus = .failed("couldn't start the upgrade — see "
+                                       + "~/Library/Logs/flow-bar.log")
+            }
+            return
+        }
+        guard let rel = availableUpdate else { return }
         updateStatus = .installing
         Task {
             do { try await Updater.install(rel) }        // success → app quits & relaunches
             catch { self.updateStatus = .failed("\(error)") }
+        }
+    }
+
+    /// Report how the last brew upgrade went.
+    ///
+    /// The app isn't running when the result is known — brew quits it and the
+    /// script relaunches it — so the outcome arrives as a marker file read at
+    /// startup rather than as the return value of anything.
+    func reportLastUpgradeResult() {
+        switch BrewUpgradeRunner.consumeLastResult() {
+        case .ok:
+            flashResult(.success)
+            FlowClient.log("brew-upgrade: previous run succeeded (now v\(currentVersion))")
+        case .failed:
+            updateStatus = .failed("the last brew upgrade failed — see "
+                                   + "~/Library/Logs/flow-bar-upgrade.log")
+            FlowClient.log("brew-upgrade: previous run FAILED")
+        case nil:
+            break   // no upgrade has run, or its result was already reported
         }
     }
 

@@ -110,6 +110,66 @@ public struct FlowClient: Sendable {
         return (outData, stderr, process.terminationStatus)
     }
 
+    /// Launch a script that must **outlive this app**, in its own session.
+    ///
+    /// Used for the Homebrew self-upgrade, where the cask's `uninstall quit:`
+    /// stops flow-bar partway through: an ordinary child would be at the mercy
+    /// of whatever signal tears the app down. `POSIX_SPAWN_SETSID` makes the
+    /// child a session leader with no controlling terminal, so it is orphaned to
+    /// launchd and keeps running rather than dying with its parent.
+    ///
+    /// Fire-and-forget by design — there is deliberately no `waitpid`, because
+    /// the caller is about to terminate. The script reports its own outcome by
+    /// writing a marker file and relaunching the app.
+    @discardableResult
+    public static func spawnDetached(_ path: String, _ args: [String] = [],
+                                     logPath: String? = nil) -> Bool
+    {
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+        // Own session: survives the parent being quit, and can't be killed by a
+        // signal sent to the app's process group.
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID))
+
+        var fa: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fa)
+        defer { posix_spawn_file_actions_destroy(&fa) }
+        // Detach stdin, and send output somewhere durable — the app will not be
+        // around to read a pipe.
+        _ = "/dev/null".withCString {
+            posix_spawn_file_actions_addopen(&fa, 0, $0, O_RDONLY, 0)
+        }
+        if let logPath {
+            _ = logPath.withCString {
+                posix_spawn_file_actions_addopen(&fa, 1, $0, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+            }
+            _ = posix_spawn_file_actions_adddup2(&fa, 1, 2)
+        }
+
+        var envDict = ProcessInfo.processInfo.environment
+        envDict["PATH"] = searchPATH
+        // Homebrew must be free to auto-update; the script relies on being able
+        // to refresh the tap, and an inherited opt-out would defeat it.
+        envDict.removeValue(forKey: "HOMEBREW_NO_AUTO_UPDATE")
+
+        let argv: [UnsafeMutablePointer<CChar>?] = ([path] + args).map { strdup($0) } + [nil]
+        let envp: [UnsafeMutablePointer<CChar>?] = envDict.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            for p in argv where p != nil { free(p) }
+            for p in envp where p != nil { free(p) }
+        }
+
+        var pid: pid_t = 0
+        let rc = posix_spawn(&pid, path, &fa, &attr, argv, envp)
+        guard rc == 0 else {
+            log("spawnDetached: \(path) -> posix_spawn rc=\(rc) (\(String(cString: strerror(rc))))")
+            return false
+        }
+        log("spawnDetached: \(path) -> pid \(pid) (own session)")
+        return true
+    }
+
     /// Append a line to ~/Library/Logs/flow-bar.log so we can see exactly how
     /// the app invokes flow.
     public static func log(_ message: String) {

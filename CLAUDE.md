@@ -273,9 +273,39 @@ Building locally is the entire point.
 - Cask paths include the tarball's `flow-bar-#{version}/` wrapper. Homebrew only
   flattens a single extracted child when it is *not* a directory
   (`UnpackStrategy#extract_nestedly`), so GitHub's wrapper survives staging.
-- `Updater.swift` **refuses to self-install** on the `homebrew-source` channel —
-  swapping in a CI-built zip would undo the native build. It offers
-  `brew upgrade --cask flow-bar` instead.
+- `Updater.swift` **never self-installs the released zip** on the
+  `homebrew-source` channel. It would break three things, two silently:
+  1. **The Automation grant dies.** TCC keys the grant to the bundle's
+     Designated Requirement. Source installs are signed with a *per-machine*
+     identity (`create-signing-cert.sh`); the zip carries CI's own persistent
+     cert. Swapping them changes the DR, so `flow do` starts failing with
+     -1743 and no message — and it would thrash, since the next `brew upgrade`
+     signs locally again.
+  2. **The UI stops being native.** CI builds on `macos-15`, so the zip links
+     against that SDK, and SwiftUI takes its appearance from the linked SDK.
+  3. **Homebrew's receipt goes stale**, so brew and the app disagree.
+- **Instead the Update button delegates to brew** (`BrewUpgrade`,
+  `BrewUpgradeRunner`) — still one click. The app writes a script, launches it
+  with `POSIX_SPAWN_SETSID` so it **outlives the app** (the cask's
+  `uninstall quit:` kills it partway), quits itself, and the script pulls the
+  tap, runs `brew upgrade`, records `ok`/`failed` in a marker file and
+  relaunches the app. The relaunch is the progress signal; the marker is read at
+  the next launch (`reportLastUpgradeResult`), since nothing is running when the
+  result is known. flow-bar quitting *itself* first is deliberate: it leaves
+  brew's AppleScript `quit` with nothing to do, which keeps the whole upgrade
+  off the Automation grant.
+- **The tap refresh is not optional.** flow-bar is in a third-party tap, and
+  `brew upgrade` can't see a new version until that tap's checkout is pulled —
+  which auto-update skips within `HOMEBREW_AUTO_UPDATE_SECS` or under
+  `HOMEBREW_NO_AUTO_UPDATE`. Verified: with a stale tap `brew outdated --cask
+  flow-bar` printed nothing while 0.4.0 was already published; after pulling it
+  printed `flow-bar (0.3.1) != 0.4.0`.
+- **`FBBuildSDK` must not be guessed from `xcrun --show-sdk-version` alone.**
+  With Xcode selected it can still resolve to the Command Line Tools SDK path
+  and fail outright, which used to stamp `unknown` and silently disable the
+  rebuild nudge that exists to catch a non-native build. `build-app.sh` now asks
+  for the `macosx` SDK explicitly, falls back to the OS version, and finally
+  prefers what the linked binary actually records in `LC_BUILD_VERSION`.
 - The prebuilt `.dmg`/`.zip` on releases exist only for people who won't install
   a toolchain, and for the in-app updater that serves them.
 - `.github/workflows/verify-install.yml` asserts the acceptance test: the

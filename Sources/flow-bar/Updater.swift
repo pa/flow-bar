@@ -23,10 +23,31 @@ enum Updater {
     /// Homebrew owns updates for source installs; see the type comment.
     static var isManagedInstall: Bool { AppInfo.isManagedInstall }
 
+    /// Our Homebrew tap, as `brew` names it.
+    static let tap = "pa/flow-bar"
+
     /// The command a managed install should run instead of self-updating.
-    static let upgradeCommand = "brew upgrade --cask flow-bar"
+    ///
+    /// **The tap refresh is not optional.** flow-bar lives in a third-party tap,
+    /// and `brew upgrade` only sees a new version once that tap's git checkout
+    /// has been pulled. `brew upgrade` normally does that for you via
+    /// auto-update — but not if the last one was inside `HOMEBREW_AUTO_UPDATE_SECS`
+    /// (24h by default) or if `HOMEBREW_NO_AUTO_UPDATE` is set. Verified: with a
+    /// stale tap, `brew outdated --cask flow-bar` reported nothing at all while
+    /// 0.4.0 was already published; after pulling the tap it reported
+    /// `flow-bar (0.3.1) != 0.4.0`. So offering the bare upgrade command meant
+    /// telling the user an update existed and handing them something that
+    /// couldn't find it.
+    ///
+    /// Pulling the one tap rather than running `brew update` keeps it quick —
+    /// `brew update` refreshes every tap and homebrew-core too — and it's the
+    /// same fast-forward that update would have performed.
+    static let upgradeCommand =
+        "git -C \"$(brew --repository \(tap))\" pull --ff-only && brew upgrade --cask flow-bar"
 
     /// The command to rebuild against a newer macOS SDK after an OS upgrade.
+    /// No tap refresh here: a reinstall rebuilds the version already pinned in
+    /// the cask, so there is nothing new to fetch.
     static let rebuildCommand = "brew reinstall --cask flow-bar"
 
     struct Release: Sendable { let version: String; let zipURL: URL }

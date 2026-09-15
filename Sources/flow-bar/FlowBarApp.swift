@@ -110,6 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self?.showPopoverForReminder()
         }
 
+        // If a brew self-upgrade ran, we weren't alive when it finished — the
+        // script relaunched us. Pick up its verdict now.
+        store.reportLastUpgradeResult()
+
         // Global hotkey (default ⌥⌘F) toggles the popover from anywhere.
         HotKeyManager.shared.onFire = { [weak self] in self?.togglePopover() }
         HotKeyManager.shared.register(store.toggleShortcut)

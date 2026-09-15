@@ -367,16 +367,19 @@ struct MenuContentView: View {
             .buttonStyle(.plain).help(msg)
         case .idle:
             if let up = store.availableUpdate, store.isManagedInstall {
-                // Homebrew owns this install: offer the command, not an install.
+                // Homebrew owns this install, so brew does the work — but it is
+                // still one click, not a command to paste.
                 Button { store.installUpdate() } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "doc.on.doc").font(.system(size: 11))
-                        Text("v\(up.version) — brew upgrade").font(.system(size: 12, weight: .medium))
+                        Image(systemName: "arrow.down.circle.fill").font(.system(size: 12))
+                        Text("Update to v\(up.version)").font(.system(size: 12, weight: .medium))
                     }
                     .foregroundStyle(Theme.accent)
                 }
                 .buttonStyle(.plain)
-                .help("Copy “\(Updater.upgradeCommand)” to the clipboard")
+                .help("Runs “\(Updater.upgradeCommand)”. flow-bar quits, Homebrew "
+                      + "rebuilds it for your macOS, and it reopens when it's done "
+                      + "(about a minute).")
             } else if store.needsSDKRebuild {
                 // Built against an older SDK than the OS we're on, so the UI is
                 // rendering in compatibility mode. A rebuild fixes it.
