@@ -3,6 +3,17 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.4.2 — 2026-09-15
+
+### Fixed
+
+- **Clicking the menubar icon closes the popover again.** It had become
+  impossible to dismiss from the icon: the popover closes on mouse-down, but the
+  button's action arrives on mouse-up and read that dismissal as a request to
+  open, so every closing click immediately reopened it. A click that lands
+  within a moment of a dismissal is now treated as the back half of the same
+  click. Opening and closing with the keyboard shortcut was never affected.
+
 ## v0.4.1 — 2026-09-15
 
 ### Fixed

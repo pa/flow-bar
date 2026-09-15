@@ -153,30 +153,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         updateIcon()
     }
 
+    /// When the popover last closed, used to swallow the phantom reopen below.
+    private var lastPopoverCloseAt: Date = .distantPast
+
+    /// How close to a dismissal an open request has to be to count as the tail
+    /// of the same click.
+    ///
+    /// Comfortably longer than a mouse-down→mouse-up (a few ms), comfortably
+    /// shorter than a deliberate close-then-reopen. A real second click lands
+    /// well outside it.
+    private static let reopenSuppression: TimeInterval = 0.3
+
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
         if popover.isShown {
             popover.performClose(nil)
-        } else {
-            // A blocked session is the reason you clicked, so land on Needs-you
-            // rather than the In-progress list. Read before `openNonce`, which
-            // is what makes MenuContentView re-run `prepareForOpen`.
-            store.pendingAttention = store.sessionAlertsEnabled
-                && store.sessionMonitor.attentionCount > 0
-            // Re-resolve now, so what opens is authoritative rather than
-            // whatever the watch last saw.
-            store.sessionMonitor.refreshNow()
-            store.openNonce += 1
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
-            popover.contentViewController?.view.window?.makeKey()
-            store.beginActiveRefresh()
-            // They're looking at the list now, so an idle session has said what
-            // it had to say. A hard block stays lit until it's actually dealt
-            // with — see markTurnEndsSeen.
-            store.sessionMonitor.markTurnEndsSeen()
-            installOutsideClickMonitor()
+            return
         }
+        // Clicking the icon to CLOSE the popover used to reopen it instead.
+        //
+        // `.transient` dismisses on mouse-DOWN, but `NSButton` sends its action
+        // on mouse-UP — so by the time this runs, `isShown` is already false and
+        // the branch below reads a dismissal as a request to open. The icon
+        // could therefore never close the popover.
+        //
+        // The two events are milliseconds apart, so treat an open that lands
+        // right after a close as the back half of one click and drop it.
+        if Date().timeIntervalSince(lastPopoverCloseAt) < Self.reopenSuppression {
+            if SessionMonitor.verbose { FlowClient.log("popover: suppressed reopen after close") }
+            return
+        }
+        // A blocked session is the reason you clicked, so land on Needs-you
+        // rather than the In-progress list. Read before `openNonce`, which
+        // is what makes MenuContentView re-run `prepareForOpen`.
+        store.pendingAttention = store.sessionAlertsEnabled
+            && store.sessionMonitor.attentionCount > 0
+        // Re-resolve now, so what opens is authoritative rather than whatever
+        // the watch last saw.
+        store.sessionMonitor.refreshNow()
+        store.openNonce += 1
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
+        store.beginActiveRefresh()
+        // They're looking at the list now, so an idle session has said what it
+        // had to say. A hard block stays lit until it's actually dealt with —
+        // see markTurnEndsSeen.
+        store.sessionMonitor.markTurnEndsSeen()
+        installOutsideClickMonitor()
     }
 
     /// Show the popover (without toggling it closed) and bump `openNonce` so
@@ -233,6 +257,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // Stop all refreshing + free caches whenever the popover closes (incl.
     // outside-click). Nothing runs while the popover is closed.
     func popoverDidClose(_ notification: Notification) {
+        // Stamped for the reopen guard in togglePopover: `.transient` closes on
+        // mouse-down, and the button's action then arrives on mouse-up.
+        lastPopoverCloseAt = Date()
         removeOutsideClickMonitor()
         store.endActiveRefresh()
     }
