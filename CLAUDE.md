@@ -28,7 +28,8 @@ on that basis; it exists for the source-install path.) The harness lives in
 `Sources/flowbar-tests` (see `T` in `Harness.swift`) and covers the pure
 `FlowBarCore` logic: model decoding, `filtered`/`sorted` helpers, the
 owners/tags text parsers, `DashboardMetrics`, the markdown block parser,
-and the drill-in list flags/split. Run `swift run flowbar-tests`.
+the drill-in list flags/split, and the session watcher's transcript parsers
+(Claude + Codex), locator and session-id parser. Run `swift run flowbar-tests`.
 
 `build-app.sh` produces `flow-bar.app` (gitignored). To relaunch after a
 rebuild, kill the old instance first:
@@ -50,7 +51,14 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
     rules). Pure data, no AppKit, so the harness covers it.
   - `FlowClient.swift` — binary discovery (+ a generous PATH so GUI launches
     find `flow`/`claude`), `Process` runner, entity reads (JSON; owners/tags
-    via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions.
+    via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions,
+    and `sessionInfo`/`parseSessionInfo` (a task's harness session binding).
+  - `SessionTranscript.swift` — `TranscriptParser` folds Claude Code session
+    JSONL into a `SessionActivity`, plus `TranscriptTime` (a hand-rolled
+    ISO-8601 scanner). Pure and incremental, so the harness covers it.
+  - `SessionTail.swift` — `SessionLocator` (session id → transcript file) and
+    `TranscriptTail` (delta reads over one transcript).
+  - `RelativeAge.swift` — compact `4s` / `2m` / `1h` ages for session rows.
 - **`flow-bar`** (executable): the SwiftUI app.
   - `FlowBarApp.swift` — an AppKit `NSStatusItem` + `NSPopover` driven from an
     `AppDelegate` (NOT `MenuBarExtra`, which can't re-render the icon while the
@@ -75,6 +83,8 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
     tasks), `PlaybooksView` (brief + notes + runs + Run), `OwnersView`
     (questions/tasks + pause/resume). Plus `TaskRow`. (A Team view existed
     but was removed.)
+  - `SessionMonitor.swift` — kqueue watcher over live sessions' transcripts;
+    drives the menubar alert and the Needs-you list. See "Session alerts".
   - `MarkdownText.swift` — an `NSTextView` (explicit **TextKit 1** stack)
     rendering `Markdown.parse`'s blocks. Used by task detail, playbook
     detail, and every update tile.
@@ -88,6 +98,107 @@ The Tasks list is in-progress only, and every in-progress task has a
 live, or spawns a new one**. flow's terminal backend needs a one-time macOS
 **Accessibility** grant; that's expected. We deliberately do NOT reimplement
 the spawn (hand-rolling a resume can't focus a specific existing tab).
+
+## Session alerts
+
+flow-bar watches the harness sessions behind your live tasks and turns the
+menubar icon orange when one is **stopped waiting for you**. Clicking it opens
+the popover straight on Needs-you, where the blocked sessions are listed first;
+clicking one runs `flow do` and lands you in its terminal. **Opt-in**
+(Settings > Session alerts): it is the only part of the app that observes
+anything while the popover is closed.
+
+What this knows that a raw session monitor can't is the *task*. Other tools can
+only say "~/dev/projects/flow-bar - running"; flow-bar knows the binding, so the
+row reads "flow-bar-notch - waiting on you".
+
+- **It is a watch, not a poll**, so the "no background polling" promise survives.
+  kqueue vnode sources: one per live transcript (each event reads only the
+  appended bytes), plus one on the flow root **directory** - the directory,
+  because SQLite in WAL mode writes `flow.db-wal` and a watch on `flow.db` alone
+  would miss most mutations. The only timer is a single-shot armed while a tool
+  call is outstanding: kqueue can say a file changed, never that 8 seconds passed
+  with nothing happening, and that elapsed-time transition is exactly what
+  "waiting on you" means (`TranscriptParser.nextTransition`). The icon pulse is a
+  second timer, and it runs only while something is actually blocked.
+- **"Blocked" is decided by exact signals first, inference only as a residue.**
+  In order:
+  0. A **Claude Code `Notification` hook** (`ClaudeHookConfig`,
+     `SessionAlertHook`) - the only exact way to see a permission prompt, and it
+     carries Claude's own wording ("Bash wants to run: npm test"). Chosen over
+     `PermissionRequest` because `Notification` is informational: it cannot
+     allow/deny, so a wedged flow-bar can never delay a prompt the user is
+     waiting on. Matcher is deliberately narrow -
+     `permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog`,
+     never `*`, so `auth_success` and `agent_completed` raise nothing.
+  1. Codex `*_approval_request` - it said outright that it is asking.
+  2. An outstanding tool in `SessionActivity.blockingTools`
+     (`AskUserQuestion`, `ExitPlanMode`) - tools whose whole job is to stop and
+     ask, so no debounce applies. This is the common case: `AskUserQuestion` is
+     how Claude asks anything.
+  3. Any other outstanding tool, past the debounce - **only as a fallback**.
+     Requires `mayPrompt` (a mode where a prompt can appear at all; `auto` and
+     `bypassPermissions` can't) AND `inferPermissionPrompts`, which is false
+     whenever the hook is active. With the hook in effect a real prompt
+     announces itself, so guessing can only add mistakes - a slow tool that a
+     `permissions.allow` rule auto-approved raises no prompt, yet the debounce
+     would fire on it. The Settings slider is therefore hidden while the hook is
+     active: a control that changes nothing is worse than no control.
+  Separately, a **finished turn you haven't seen** also counts (`needsYou`) -
+  the session is sitting idle until you type. It behaves like an unread badge,
+  cleared when the popover opens (`markTurnEndsSeen`) and re-armed by the next
+  turn end, because the stored value is the turn's own timestamp. A five-minute
+  window was tried first and was simply wrong: a turn that ended six minutes ago
+  still wants you.
+  Measured on a real transcript: `AskUserQuestion` sat unanswered for 62
+  minutes while every `Bash` in the same session finished in a 0.1s median and
+  a 10.3s max. The populations don't overlap, so guessing between them was
+  never necessary - and a bare 8s debounce would have fired on that 10.3s Bash.
+  `abandonAfter` (30 min) still stops a killed session badging forever.
+- **The hook gives the start; the transcript gives the end.** A permission
+  prompt leaves NO trace in the JSONL until it is answered, so only the hook can
+  see it begin; an alert is retired once the transcript shows activity dated
+  after it. But **Claude Code flushes its transcript at turn boundaries, not per
+  entry** (measured: a mid-turn session left its JSONL untouched for minutes),
+  so that retirement can lag a whole turn. Hence two more outs: clicking the row
+  dismisses the alert immediately (`dismissAlert`), and `alertExpiry` (30 min)
+  catches "answered it, then walked away".
+- **`~/.claude/settings.json` belongs to the user and other tools write to it.**
+  In the wild it already held CodeIsland's `Notification` hook and orca's
+  `PermissionRequest` hook. So the splice is surgical and covered by tests on
+  realistic input: unknown keys survive, other entries survive, removal deletes
+  only entries carrying our marker comment, and empty `Notification`/`hooks`
+  keys are pruned rather than left as `{}`. The original is copied to
+  `settings.json.flow-bar.bak` before the first write. Installed when the
+  Session-alerts toggle goes on, removed when it goes off.
+- **Only flow-managed sessions count.** Every row goes somewhere, and `flow do`
+  needs a slug; an unmanaged session has nowhere to go.
+- **Both harnesses.** flow bootstraps under Claude Code *or* Codex
+  (`flow do --harness`), and `flow show task` does NOT say which - so it is
+  inferred from where the transcript turns up: a Claude session id is a whole
+  filename under `~/.claude/projects/<mangled-cwd>/`, a Codex thread id is the
+  *suffix* of `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`. Both are
+  UUIDs, so there is nothing to disambiguate. `TranscriptParser` sniffs the
+  dialect per line (Claude puts substance in `message`, Codex in `payload`).
+- **`flow list tasks --format json` does NOT emit `session_id`.** It's only in
+  `flow show task <slug>` as text. Hence one `flow show` per *live* task.
+- **A transcript's directory is keyed to the cwd the session launched from, not
+  the task's `work_dir`**, and the mangled name (`-Users-p-dev-projects`) can't
+  be decoded back (a real directory may contain a dash). Find transcripts by
+  session-id filename; read `cwd` from inside the transcript.
+- **The alert recolours the icon rather than badging it**, so the status item
+  never changes width and no menubar item shifts. It deliberately overrides the
+  monochrome-icon preference - that setting is about the resting appearance, and
+  an alert that honoured it would be invisible.
+- **The pulse is separable from the alert** (`sessionAlertPulse`, on by
+  default). Motion is why the icon catches a glance in a row of small coloured
+  glyphs, but it is also the part that grates, so it can be switched off and the
+  orange tint remains - no information is lost, only the movement. The default
+  is read via `object(forKey:) as? Bool ?? true` rather than `bool(forKey:)`,
+  which cannot distinguish "absent" from "explicitly false" and would therefore
+  default it off; a `register(defaults:)` would also be too late, since the
+  Store is built before `applicationDidFinishLaunching`.
+- Trace it with `defaults write cloud.facets.flow-bar sessionWatchVerbose -bool true`.
 
 ## Gotchas
 
@@ -181,8 +292,10 @@ user-initiated, and need the one-time Accessibility grant.
 
 ## Status
 
-Phases 1–11 complete. v1 (P1–6): data layer, menubar shell, search switcher,
+Phases 1–12 complete. v1 (P1–6): data layer, menubar shell, search switcher,
 polling + due badge, docs. Expansion (P7–11): icon-rail nav +
 metrics dashboard + brand "w" icon, Needs-you inbox, Projects drill-in,
-Playbooks, Owners. Tracked in flow as task `flow-bar` (project `side-quests`,
+Playbooks, Owners. P12: session alerts — the menubar icon flags a harness
+session that is blocked on you (task `flow-bar-notch`, uncommitted). Tracked in
+flow as task `flow-bar` (project `side-quests`,
 `#flow`).

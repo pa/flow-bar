@@ -1,3 +1,4 @@
+import CoreGraphics
 import FlowBarCore
 import Foundation
 
@@ -694,5 +695,664 @@ T.expect([FlowTask]().splitByActivity().isEmpty, "an empty list splits to empty"
 // on it, which is exactly the line the separator draws.
 T.equal([task("a", status: "in-progress", archived: true)].splitByActivity().active.count, 0,
         "archived never counts as active")
+
+// MARK: - Session transcripts (island)
+
+print("\nTranscriptTime")
+T.test("parse the shape Claude Code writes") {
+    let d = TranscriptTime.parse("2026-09-15T15:20:08.482Z")
+    T.expect(d != nil, "parses fractional-second UTC")
+    // 2026-09-15T15:20:08Z == 1789226408 epoch seconds.
+    T.equal(d.map { Int($0.timeIntervalSince1970) }, 1_789_485_608, "epoch seconds")
+    T.expect(abs((d?.timeIntervalSince1970 ?? 0) - 1_789_485_608.482) < 0.001, "fraction kept")
+}
+T.test("parse without fractional seconds") {
+    T.equal(TranscriptTime.parse("2026-09-15T15:20:08Z").map { Int($0.timeIntervalSince1970) },
+            1_789_485_608, "no-fraction form")
+}
+T.test("reject shapes we do not understand") {
+    // A wrong timestamp would make the "waiting on you" badge lie, so anything
+    // unfamiliar must come back nil rather than be guessed at.
+    T.expect(TranscriptTime.parse("") == nil, "empty")
+    T.expect(TranscriptTime.parse("2026-09-15") == nil, "date only")
+    T.expect(TranscriptTime.parse("2026-09-15T15:20:08+05:30") == nil, "non-UTC offset")
+    T.expect(TranscriptTime.parse("2026-13-15T15:20:08Z") == nil, "month 13")
+    T.expect(TranscriptTime.parse("2026-09-15T25:20:08Z") == nil, "hour 25")
+    T.expect(TranscriptTime.parse("not-a-timestamp-at-all") == nil, "garbage")
+}
+T.test("epoch day zero") {
+    T.equal(TranscriptTime.daysFromCivil(year: 1970, month: 1, day: 1), 0, "1970-01-01")
+    T.equal(TranscriptTime.daysFromCivil(year: 2000, month: 3, day: 1), 11_017, "2000-03-01")
+}
+
+print("\nTranscriptParser")
+
+/// Build one assistant `tool_use` line.
+func toolUse(_ id: String, _ name: String, _ ts: String) -> [String: Any] {
+    ["type": "assistant", "timestamp": ts,
+     "message": ["content": [["type": "tool_use", "id": id, "name": name]]]]
+}
+/// Build one user `tool_result` line.
+func toolResult(_ id: String, _ ts: String) -> [String: Any] {
+    ["type": "user", "timestamp": ts,
+     "message": ["content": [["type": "tool_result", "tool_use_id": id]]]]
+}
+func assistantText(_ text: String, _ ts: String) -> [String: Any] {
+    ["type": "assistant", "timestamp": ts,
+     "message": ["content": [["type": "text", "text": text]]]]
+}
+func userPrompt(_ text: String, _ ts: String, isMeta: Bool = false) -> [String: Any] {
+    ["type": "user", "timestamp": ts, "isMeta": isMeta, "message": ["content": text]]
+}
+let t0 = TranscriptTime.parse("2026-09-15T15:20:00.000Z")!
+func at(_ seconds: Double) -> Date { t0.addingTimeInterval(seconds) }
+
+T.test("an unresolved tool_use becomes waiting-on-you past the debounce") {
+    var p = TranscriptParser()
+    p.consume(object: toolUse("t1", "Bash", "2026-09-15T15:20:00.000Z"))
+    T.equal(p.pending.count, 1, "one outstanding")
+    // Inside the window it is merely working...
+    T.equal(p.activity(now: at(3)), .working(tool: "Bash", since: t0), "3s in = working")
+    T.equal(p.activity(now: at(7.99)), .working(tool: "Bash", since: t0), "just under = working")
+    // ...and at the boundary it flips.
+    T.equal(p.activity(now: at(8)), .waitingOnYou(tool: "Bash", since: t0), "8s = waiting")
+    T.equal(p.activity(now: at(60)), .waitingOnYou(tool: "Bash", since: t0), "still waiting")
+}
+
+T.test("a matching tool_result clears the pending state") {
+    var p = TranscriptParser()
+    p.consume(object: toolUse("t1", "Bash", "2026-09-15T15:20:00.000Z"))
+    p.consume(object: toolResult("t1", "2026-09-15T15:20:02.000Z"))
+    T.equal(p.pending.count, 0, "cleared")
+    T.equal(p.activity(now: at(60)), .thinking(since: at(2)),
+            "after a result the assistant is thinking, not waiting")
+}
+
+T.test("parallel tool calls resolve out of order and age from the oldest") {
+    var p = TranscriptParser()
+    p.consume(object: toolUse("a", "Read", "2026-09-15T15:20:00.000Z"))
+    p.consume(object: toolUse("b", "Grep", "2026-09-15T15:20:01.000Z"))
+    p.consume(object: toolResult("a", "2026-09-15T15:20:01.500Z"))
+    T.equal(p.pending.map(\.id), ["b"], "only b outstanding")
+    // The badge must age from the oldest SURVIVING call, not the oldest ever.
+    T.equal(p.activity(now: at(8)), .working(tool: "Grep", since: at(1)),
+            "b is only 7s old, so still working")
+    T.equal(p.activity(now: at(9)), .waitingOnYou(tool: "Grep", since: at(1)), "b crosses at 9s")
+}
+
+T.test("a turn that ends in text is your move") {
+    var p = TranscriptParser()
+    p.consume(object: userPrompt("do the thing", "2026-09-15T15:20:00.000Z"))
+    T.equal(p.activity(now: at(1)), .thinking(since: t0), "prompt in, no reply yet")
+    p.consume(object: assistantText("done", "2026-09-15T15:20:05.000Z"))
+    T.equal(p.activity(now: at(600)), .awaitingPrompt(since: at(5)),
+            "assistant finished — waiting for the human, however long")
+}
+
+T.test("a system-injected user entry is not a new prompt") {
+    var p = TranscriptParser()
+    p.consume(object: assistantText("done", "2026-09-15T15:20:00.000Z"))
+    p.consume(object: userPrompt("<system-reminder>…", "2026-09-15T15:20:01.000Z", isMeta: true))
+    T.equal(p.activity(now: at(2)), .awaitingPrompt(since: at(1)),
+            "isMeta must not flip the session back to thinking")
+}
+
+T.test("an abandoned tool call stops claiming your attention") {
+    var p = TranscriptParser()
+    p.consume(object: toolUse("t1", "Bash", "2026-09-15T15:20:00.000Z"))
+    // Half an hour later this is debris — a killed session, or a transcript we
+    // joined mid-stream. Badging it forever would train the user to ignore it.
+    T.equal(p.activity(now: at(1_801)), .unknown, "past abandonAfter it is dropped")
+    T.expect(!p.activity(now: at(1_801)).needsAttention, "and stops demanding attention")
+}
+
+T.test("thresholds are honored") {
+    var p = TranscriptParser()
+    p.consume(object: toolUse("t1", "Bash", "2026-09-15T15:20:00.000Z"))
+    let eager = SessionActivity.Thresholds(debounce: 3)
+    T.equal(p.activity(now: at(4), thresholds: eager),
+            .waitingOnYou(tool: "Bash", since: t0), "a 3s debounce fires at 4s")
+    let patient = SessionActivity.Thresholds(debounce: 20)
+    T.equal(p.activity(now: at(10), thresholds: patient),
+            .working(tool: "Bash", since: t0), "a 20s debounce does not")
+}
+
+T.test("nextTransition is armed only while a tool is outstanding") {
+    var p = TranscriptParser()
+    T.expect(p.nextTransition(now: at(0)) == nil, "nothing pending, no timer")
+    p.consume(object: toolUse("t1", "Bash", "2026-09-15T15:20:00.000Z"))
+    T.expect(abs((p.nextTransition(now: at(2)) ?? 0) - 6) < 0.001, "6s left of an 8s debounce")
+    T.expect(p.nextTransition(now: at(8)) == nil, "already fired, nothing more to schedule")
+    p.consume(object: toolResult("t1", "2026-09-15T15:20:09.000Z"))
+    T.expect(p.nextTransition(now: at(9)) == nil, "resolved, timer disarmed")
+}
+
+T.test("unknown and malformed lines degrade instead of failing") {
+    var p = TranscriptParser()
+    // The line types Claude Code interleaves that carry no activity.
+    for t in ["mode", "attachment", "ai-title", "permission-mode", "file-history-snapshot"] {
+        p.consume(object: ["type": t, "sessionId": "x"])
+    }
+    T.equal(p.activity(now: at(1)), .unknown, "no activity inferred from noise")
+    p.consume(line: "{not json")
+    p.consume(line: "")
+    T.equal(p.malformedLines, 1, "blank lines are not malformed, broken JSON is")
+    // A real entry still lands after the noise.
+    p.consume(line: #"{"type":"assistant","timestamp":"2026-09-15T15:20:05.000Z","message":{"content":[{"type":"text","text":"hi"}]}}"#)
+    T.equal(p.activity(now: at(6)), .awaitingPrompt(since: at(5)), "recovers")
+}
+
+T.test("a tool_use with no timestamp can never be aged into an alert") {
+    var p = TranscriptParser()
+    p.consume(object: ["type": "assistant",
+                       "message": ["content": [["type": "tool_use", "id": "t", "name": "Bash"]]]])
+    T.equal(p.pending.count, 0, "dropped rather than anchored to now")
+    T.equal(p.activity(now: at(60)), .unknown, "no invented age")
+}
+
+T.test("attention ordering puts the alerting states first") {
+    let states: [SessionActivity] = [
+        .unknown, .thinking(since: nil), .working(tool: "Bash", since: t0),
+        .awaitingPrompt(since: nil), .waitingOnYou(tool: "Bash", since: t0),
+    ]
+    // A blocked row's label names the *kind* of block; "Bash" outstanding past
+    // the debounce in a prompting mode means it's awaiting approval.
+    T.equal(states.sorted { $0.rank < $1.rank }.map(\.label),
+            ["needs approval", "your turn", "bash", "thinking", "unknown"],
+            "sort order")
+    T.expect(SessionActivity.waitingOnYou(tool: "x", since: t0).needsAttention, "alerts")
+    T.expect(!SessionActivity.awaitingPrompt(since: nil).needsAttention, "your-turn does not badge")
+}
+
+print("\nTranscriptParser — what actually counts as blocked")
+
+/// A Claude `permission-mode` line.
+func permMode(_ mode: String) -> [String: Any] {
+    ["type": "permission-mode", "permissionMode": mode, "sessionId": "s"]
+}
+
+T.test("AskUserQuestion blocks immediately — no debounce at all") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("auto"))
+    p.consume(object: toolUse("q1", "AskUserQuestion", "2026-09-15T15:20:00.000Z"))
+    // Measured in a real transcript: AskUserQuestion sat for 62 minutes while
+    // every Bash call in the same session finished in 0.1s median. There is
+    // nothing to infer — the tool's whole job is to stop and ask.
+    T.equal(p.activity(now: at(0.2)), .waitingOnYou(tool: "AskUserQuestion", since: t0),
+            "blocked from the first instant")
+    T.equal(p.activity(now: at(0.2)).label, "asking you", "says what kind of block")
+    T.expect(p.activity(now: at(0.2)).needsAttention, "alerts")
+}
+
+T.test("ExitPlanMode blocks immediately too") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("plan"))
+    p.consume(object: toolUse("e1", "ExitPlanMode", "2026-09-15T15:20:00.000Z"))
+    T.equal(p.activity(now: at(0.1)).label, "plan approval", "plan approval")
+    T.expect(p.activity(now: at(0.1)).needsAttention, "alerts")
+}
+
+T.test("a slow Bash in auto mode is NEVER a permission prompt") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("auto"))
+    p.consume(object: toolUse("b1", "Bash", "2026-09-15T15:20:00.000Z"))
+    // This is the false alarm that made the old rule untrustworthy: a real
+    // session had Bash run for 10.3s with nothing blocked. In auto mode the
+    // classifier answers immediately, so a hang is a slow command, full stop.
+    T.equal(p.activity(now: at(11)), .working(tool: "Bash", since: t0), "11s — still just working")
+    T.equal(p.activity(now: at(600)), .working(tool: "Bash", since: t0), "10 minutes — still working")
+    T.expect(!p.activity(now: at(600)).needsAttention, "never alerts")
+}
+
+T.test("bypassPermissions likewise never infers a prompt") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("bypassPermissions"))
+    p.consume(object: toolUse("b1", "Bash", "2026-09-15T15:20:00.000Z"))
+    T.expect(!p.activity(now: at(600)).needsAttention, "nothing to prompt about")
+}
+
+T.test("in a prompting mode a stuck tool DOES read as awaiting approval") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("default"))
+    p.consume(object: toolUse("b1", "Bash", "2026-09-15T15:20:00.000Z"))
+    T.equal(p.activity(now: at(3)), .working(tool: "Bash", since: t0), "under the debounce")
+    T.equal(p.activity(now: at(9)), .waitingOnYou(tool: "Bash", since: t0), "past it")
+    T.equal(p.activity(now: at(9)).label, "needs approval", "labelled as approval")
+}
+
+T.test("acceptEdits still prompts for non-edit tools") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("acceptEdits"))
+    p.consume(object: toolUse("b1", "Bash", "2026-09-15T15:20:00.000Z"))
+    T.expect(p.mayPrompt, "acceptEdits auto-approves edits, not commands")
+    T.expect(p.activity(now: at(9)).needsAttention, "so a stuck Bash can still be a prompt")
+}
+
+T.test("an unknown mode is assumed to prompt") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("someFutureMode"))
+    T.expect(p.mayPrompt, "missing a real alert beats inventing a silent one")
+    // ...and so is a transcript that never states a mode.
+    T.expect(TranscriptParser().mayPrompt, "no mode reported")
+}
+
+T.test("a blocking tool wins even when an ordinary one is older") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("auto"))
+    p.consume(object: toolUse("b1", "Bash", "2026-09-15T15:20:00.000Z"))
+    p.consume(object: toolUse("q1", "AskUserQuestion", "2026-09-15T15:20:30.000Z"))
+    // The Bash is older, but the question is the thing that is actually stopped
+    // on the human — reporting "bash" here would name the wrong cause.
+    T.equal(p.activity(now: at(31)), .waitingOnYou(tool: "AskUserQuestion", since: at(30)),
+            "the question is what's blocking")
+}
+
+T.test("answering the question unblocks, even with the Bash still running") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("auto"))
+    p.consume(object: toolUse("b1", "Bash", "2026-09-15T15:20:00.000Z"))
+    p.consume(object: toolUse("q1", "AskUserQuestion", "2026-09-15T15:20:05.000Z"))
+    p.consume(object: toolResult("q1", "2026-09-15T15:21:00.000Z"))
+    T.expect(!p.activity(now: at(70)).needsAttention, "no longer blocked")
+    T.equal(p.activity(now: at(70)), .working(tool: "Bash", since: t0), "back to the slow Bash")
+}
+
+T.test("with the hook active, the debounce guess is switched off entirely") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("default"))
+    p.consume(object: toolUse("b1", "Bash", "2026-09-15T15:20:00.000Z"))
+    // A slow tool that a `permissions.allow` rule auto-approved raises no
+    // prompt at all, yet the debounce would fire on it. Once Claude Code is
+    // telling us about real prompts directly, the guess can only add mistakes.
+    let exact = SessionActivity.Thresholds(inferPermissionPrompts: false)
+    T.equal(p.activity(now: at(600), thresholds: exact), .working(tool: "Bash", since: t0),
+            "never inferred while the hook is in effect")
+    T.expect(!p.activity(now: at(600), thresholds: exact).needsAttention, "so no alert")
+    // Without the hook it is the only fallback there is, so it still works.
+    T.expect(p.activity(now: at(600)).needsAttention, "inferred when the hook is absent")
+}
+
+T.test("an exact block still fires with the guess switched off") {
+    var p = TranscriptParser()
+    p.consume(object: permMode("default"))
+    p.consume(object: toolUse("q1", "AskUserQuestion", "2026-09-15T15:20:00.000Z"))
+    let exact = SessionActivity.Thresholds(inferPermissionPrompts: false)
+    // Turning off the *guess* must not turn off the things we actually know.
+    T.expect(p.activity(now: at(1), thresholds: exact).needsAttention, "AskUserQuestion")
+    var c = TranscriptParser()
+    c.consume(object: codex("exec_approval_request", "2026-09-15T15:20:00.000Z",
+                            outer: "event_msg"))
+    T.expect(c.activity(now: at(1), thresholds: exact).needsAttention, "Codex approval")
+}
+
+T.test("permission mode is read from an entry field too, not just its own line") {
+    var p = TranscriptParser()
+    p.consume(object: ["type": "user", "timestamp": "2026-09-15T15:20:00.000Z",
+                       "permissionMode": "bypassPermissions",
+                       "message": ["content": "go"]])
+    T.equal(p.permissionMode, "bypassPermissions", "taken from the user entry")
+    T.expect(!p.mayPrompt, "and honoured")
+}
+
+T.test("Codex approval_policy maps onto the same gate") {
+    var p = TranscriptParser()
+    p.consume(object: ["type": "turn_context", "timestamp": "2026-09-15T15:20:00.000Z",
+                       "payload": ["approval_policy": "never", "cwd": "/tmp/x"]])
+    T.expect(!p.mayPrompt, "`never` will not ask")
+    p.consume(object: codex("function_call", "2026-09-15T15:20:01.000Z",
+                            ["call_id": "c1", "name": "exec_command"]))
+    T.expect(!p.activity(now: at(600)).needsAttention, "so a long command never alerts")
+}
+
+T.test("an explicit Codex approval beats the mode gate") {
+    var p = TranscriptParser()
+    p.consume(object: ["type": "turn_context", "timestamp": "2026-09-15T15:20:00.000Z",
+                       "payload": ["approval_policy": "never"]])
+    p.consume(object: codex("exec_approval_request", "2026-09-15T15:20:01.000Z",
+                            outer: "event_msg"))
+    // If Codex asked, it asked — whatever we thought the policy was.
+    T.expect(p.activity(now: at(2)).needsAttention, "an actual request always counts")
+}
+
+print("\nTranscriptParser — Codex")
+
+/// Codex wraps everything in `payload`; Claude puts it in `message`.
+func codex(_ payloadType: String, _ ts: String, outer: String = "response_item",
+           _ extra: [String: Any] = [:]) -> [String: Any] {
+    var payload: [String: Any] = ["type": payloadType]
+    payload.merge(extra) { _, new in new }
+    return ["type": outer, "timestamp": ts, "payload": payload]
+}
+
+T.test("the format is sniffed per line, not declared") {
+    var p = TranscriptParser()
+    // One parser, fed both dialects, keeps a single coherent state machine.
+    p.consume(object: codex("session_meta", "2026-09-15T15:20:00.000Z", outer: "session_meta",
+                            ["cwd": "/Users/p/dev/x", "id": "abc"]))
+    T.equal(p.cwd, "/Users/p/dev/x", "cwd from Codex session_meta")
+    p.consume(object: assistantText("hi", "2026-09-15T15:20:01.000Z"))
+    T.equal(p.activity(now: at(2)), .awaitingPrompt(since: at(1)), "Claude line still parses")
+}
+
+T.test("Codex function calls pair on call_id") {
+    var p = TranscriptParser()
+    p.consume(object: codex("function_call", "2026-09-15T15:20:00.000Z",
+                            ["call_id": "call_1", "name": "exec_command"]))
+    T.equal(p.pending.count, 1, "outstanding")
+    T.equal(p.activity(now: at(2)), .working(tool: "exec_command", since: t0), "working")
+    T.equal(p.activity(now: at(9)), .waitingOnYou(tool: "exec_command", since: t0),
+            "same debounce as Claude")
+    p.consume(object: codex("function_call_output", "2026-09-15T15:20:10.000Z",
+                            ["call_id": "call_1"]))
+    T.equal(p.pending.count, 0, "cleared")
+    T.equal(p.activity(now: at(11)), .thinking(since: at(10)), "back to thinking")
+}
+
+T.test("Codex custom_tool_call pairs the same way") {
+    var p = TranscriptParser()
+    p.consume(object: codex("custom_tool_call", "2026-09-15T15:20:00.000Z",
+                            ["call_id": "c1", "name": "apply_patch"]))
+    T.equal(p.pending.map(\.name), ["apply_patch"], "tracked")
+    p.consume(object: codex("custom_tool_call_output", "2026-09-15T15:20:01.000Z",
+                            ["call_id": "c1"]))
+    T.expect(p.pending.isEmpty, "cleared")
+}
+
+T.test("an approval request needs no debounce — Codex says so outright") {
+    var p = TranscriptParser()
+    p.consume(object: codex("function_call", "2026-09-15T15:20:00.000Z",
+                            ["call_id": "c1", "name": "exec_command"]))
+    p.consume(object: codex("exec_approval_request", "2026-09-15T15:20:00.500Z",
+                            outer: "event_msg", ["call_id": "c1"]))
+    // Half a second in — under ANY debounce — and it already reads as blocked,
+    // because this is a fact rather than an inference.
+    T.expect(p.awaitingApproval, "flag set")
+    T.equal(p.activity(now: at(0.6)), .waitingOnYou(tool: "exec_command", since: t0),
+            "immediate, no waiting for the debounce")
+    T.expect(p.activity(now: at(0.6)).needsAttention, "and it badges")
+}
+
+T.test("apply_patch approval requests are recognised too") {
+    var p = TranscriptParser()
+    p.consume(object: codex("apply_patch_approval_request", "2026-09-15T15:20:00.000Z",
+                            outer: "event_msg"))
+    T.expect(p.awaitingApproval, "any *_approval_request counts")
+    T.expect(p.activity(now: at(1)).needsAttention, "badges with no pending tool")
+}
+
+T.test("an approval is cleared by whatever resolves it") {
+    for resolver in ["function_call_output", "task_complete", "user_message"] {
+        var p = TranscriptParser()
+        p.consume(object: codex("exec_approval_request", "2026-09-15T15:20:00.000Z",
+                                outer: "event_msg"))
+        T.expect(p.awaitingApproval, "set before \(resolver)")
+        let outer = resolver == "function_call_output" ? "response_item" : "event_msg"
+        p.consume(object: codex(resolver, "2026-09-15T15:20:05.000Z", outer: outer,
+                                ["call_id": "c1"]))
+        T.expect(!p.awaitingApproval, "cleared by \(resolver)")
+    }
+}
+
+T.test("task_complete ends the turn outright") {
+    var p = TranscriptParser()
+    p.consume(object: codex("function_call", "2026-09-15T15:20:00.000Z",
+                            ["call_id": "c1", "name": "exec_command"]))
+    p.consume(object: codex("task_complete", "2026-09-15T15:20:03.000Z", outer: "event_msg"))
+    // Claude has to infer this from a debounce; Codex states it, so a tool left
+    // dangling at the end of a turn can never masquerade as a live prompt.
+    T.expect(p.pending.isEmpty, "outstanding calls are moot once the turn ends")
+    T.equal(p.activity(now: at(600)), .awaitingPrompt(since: at(3)), "your turn, indefinitely")
+}
+
+T.test("a Codex turn in flight reads as thinking") {
+    var p = TranscriptParser()
+    p.consume(object: codex("task_started", "2026-09-15T15:20:00.000Z", outer: "event_msg"))
+    T.equal(p.activity(now: at(1)), .thinking(since: t0), "task_started")
+    p.consume(object: codex("agent_message", "2026-09-15T15:20:04.000Z", outer: "event_msg"))
+    T.equal(p.activity(now: at(5)), .awaitingPrompt(since: at(4)), "agent_message ends it")
+}
+
+T.test("Codex noise carries no activity") {
+    var p = TranscriptParser()
+    for kind in ["token_count", "reasoning", "web_search_call", "patch_apply_end"] {
+        p.consume(object: codex(kind, "2026-09-15T15:20:00.000Z"))
+    }
+    T.equal(p.activity(now: at(1)), .unknown, "nothing inferred from bookkeeping")
+}
+
+T.test("harness labels") {
+    T.equal(TranscriptFormat.claude.label, "Claude", "claude")
+    T.equal(TranscriptFormat.codex.label, "Codex", "codex")
+    T.equal(TranscriptFormat.allCases.count, 2, "both harnesses flow can bootstrap")
+}
+
+print("\nClaudeHookConfig — splicing a file we don't own")
+
+/// A settings.json shaped like the real one on this machine: other people's
+/// hooks already installed, plus unrelated top-level keys.
+func realWorldSettings() -> [String: Any] {
+    [
+        "agentPushNotifEnabled": true,
+        "enabledPlugins": ["impeccable@impeccable": true],
+        "hooks": [
+            "Notification": [
+                ["matcher": "",
+                 "hooks": [["command": "~/.codeisland/codeisland-hook.sh",
+                            "timeout": 86400, "type": "command"]]],
+            ],
+            "PermissionRequest": [
+                ["hooks": [["command": "/Users/p/.orca/agent-hooks/claude-hook.sh",
+                            "timeout": 10, "type": "command"]]],
+            ],
+        ],
+    ]
+}
+
+T.test("install appends and leaves everything else untouched") {
+    let before = realWorldSettings()
+    let after = ClaudeHookConfig.install(into: before, scriptPath: "/tmp/hook.sh")
+
+    // Unrelated top-level keys survive.
+    T.equal(after["agentPushNotifEnabled"] as? Bool, true, "unrelated key kept")
+    T.expect(after["enabledPlugins"] != nil, "plugins kept")
+
+    let hooks = after["hooks"] as? [String: Any] ?? [:]
+    // Somebody else's event, entirely untouched.
+    T.expect(hooks["PermissionRequest"] != nil, "orca's PermissionRequest hook kept")
+
+    let entries = ClaudeHookConfig.entries(in: after)
+    T.equal(entries.count, 2, "CodeIsland's entry plus ours")
+    T.expect(!ClaudeHookConfig.isOurs(entries[0]), "theirs is first and not ours")
+    T.expect(ClaudeHookConfig.isOurs(entries[1]), "ours is appended last")
+    T.expect(ClaudeHookConfig.isInstalled(in: after), "reported installed")
+}
+
+T.test("installing twice does not stack duplicates") {
+    var s = ClaudeHookConfig.install(into: realWorldSettings(), scriptPath: "/tmp/a.sh")
+    s = ClaudeHookConfig.install(into: s, scriptPath: "/tmp/b.sh")
+    let ours = ClaudeHookConfig.entries(in: s).filter { ClaudeHookConfig.isOurs($0) }
+    T.equal(ours.count, 1, "still exactly one of ours")
+    // ...and the second install won, so a moved script path is repaired.
+    let cmd = ((ours[0]["hooks"] as? [Any])?.first as? [String: Any])?["command"] as? String
+    T.expect(cmd?.contains("/tmp/b.sh") == true, "path updated to the newer one")
+    T.equal(ClaudeHookConfig.entries(in: s).count, 2, "CodeIsland's still there too")
+}
+
+T.test("remove takes only ours") {
+    let installed = ClaudeHookConfig.install(into: realWorldSettings(), scriptPath: "/tmp/hook.sh")
+    let after = ClaudeHookConfig.remove(from: installed)
+    let entries = ClaudeHookConfig.entries(in: after)
+    T.equal(entries.count, 1, "one entry left")
+    T.expect(!ClaudeHookConfig.isOurs(entries[0]), "and it is CodeIsland's")
+    T.expect(!ClaudeHookConfig.isInstalled(in: after), "no longer installed")
+    T.expect((after["hooks"] as? [String: Any])?["PermissionRequest"] != nil, "orca's kept")
+    T.equal(after["agentPushNotifEnabled"] as? Bool, true, "unrelated keys kept")
+}
+
+T.test("remove is a no-op when we were never installed") {
+    let before = realWorldSettings()
+    let after = ClaudeHookConfig.remove(from: before)
+    T.equal(ClaudeHookConfig.entries(in: after).count, 1, "their entry untouched")
+    T.expect((after["hooks"] as? [String: Any])?["PermissionRequest"] != nil, "and theirs")
+}
+
+T.test("uninstalling from a file where we were the only hook leaves no debris") {
+    let empty: [String: Any] = ["theme": "dark"]
+    let installed = ClaudeHookConfig.install(into: empty, scriptPath: "/tmp/hook.sh")
+    T.expect(installed["hooks"] != nil, "hooks created")
+    let after = ClaudeHookConfig.remove(from: installed)
+    T.expect(after["hooks"] == nil, "empty hooks key pruned, not left as {}")
+    T.equal(after["theme"] as? String, "dark", "their settings survive")
+}
+
+T.test("install works on an empty or absent settings file") {
+    let after = ClaudeHookConfig.install(into: [:], scriptPath: "/tmp/hook.sh")
+    T.expect(ClaudeHookConfig.isInstalled(in: after), "installed from nothing")
+    T.equal(ClaudeHookConfig.entries(in: after).count, 1, "exactly one entry")
+}
+
+T.test("the matcher covers blocking notifications and nothing else") {
+    let types = ClaudeHookConfig.matcher.split(separator: "|").map(String.init)
+    // These mean "stopped, wants a human".
+    for t in ["permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog"] {
+        T.expect(types.contains(t), "matches \(t)")
+    }
+    // These are informational and must never raise an alert.
+    for t in ["auth_success", "agent_completed", "quota_auto_resume_fired"] {
+        T.expect(!types.contains(t), "ignores \(t)")
+    }
+}
+
+T.test("a foreign entry that merely mentions flow-bar is not ours") {
+    var s = realWorldSettings()
+    var hooks = s["hooks"] as! [String: Any]
+    hooks["Notification"] = [
+        ["matcher": "", "hooks": [["command": "echo flow-bar", "type": "command"]]],
+    ]
+    s["hooks"] = hooks
+    // Ownership is the marker comment, not a substring of the path — otherwise
+    // uninstalling flow-bar would delete somebody else's hook.
+    T.expect(!ClaudeHookConfig.isInstalled(in: s), "not ours without the marker")
+    T.equal(ClaudeHookConfig.entries(in: ClaudeHookConfig.remove(from: s)).count, 1, "kept")
+}
+
+print("\nSessionAlert")
+T.test("decode a Notification payload") {
+    let json = #"""
+    {"session_id":"abc123","transcript_path":"/t.jsonl","cwd":"/w",
+     "hook_event_name":"Notification","notification_type":"permission_prompt",
+     "message":"Bash wants to run: npm test"}
+    """#.data(using: .utf8)!
+    let when = Date(timeIntervalSince1970: 1_000_000)
+    let a = SessionAlert.decode(json, at: when)
+    T.equal(a?.sessionID, "abc123", "session id")
+    T.equal(a?.kind, "permission_prompt", "kind")
+    // Claude Code's own wording beats anything we could invent.
+    T.equal(a?.label, "Bash wants to run: npm test", "label prefers the message")
+}
+T.test("a payload with no session id is useless and rejected") {
+    T.expect(SessionAlert.decode(Data(#"{"message":"hi"}"#.utf8), at: Date()) == nil, "no id")
+    T.expect(SessionAlert.decode(Data("not json".utf8), at: Date()) == nil, "not json")
+    T.expect(SessionAlert.decode(Data(#"{"session_id":""}"#.utf8), at: Date()) == nil, "empty id")
+}
+T.test("labels fall back per notification type when there is no message") {
+    func label(_ kind: String) -> String {
+        SessionAlert(sessionID: "s", kind: kind, message: "", at: Date()).label
+    }
+    T.equal(label("permission_prompt"), "needs approval", "permission")
+    T.equal(label("idle_prompt"), "waiting for you", "idle")
+    T.equal(label("agent_needs_input"), "needs input", "needs input")
+    T.equal(label("something_new"), "waiting on you", "unknown kind still reads sensibly")
+}
+
+print("\nSessionLocator")
+T.test("session ids are validated before becoming a path") {
+    T.expect(SessionLocator.isValidSessionID("f3f17e0d-e93c-4459-9a1f-19f118824119"), "a real uuid")
+    T.expect(!SessionLocator.isValidSessionID("../../../etc/passwd"), "no traversal")
+    T.expect(!SessionLocator.isValidSessionID("short"), "too short")
+    T.expect(!SessionLocator.isValidSessionID(""), "empty")
+    T.expect(!SessionLocator.isValidSessionID("f3f17e0d/e93c"), "no separators")
+}
+
+T.test("a Codex rollout is matched on the id SUFFIX, not a substring") {
+    // Codex names files rollout-<ISO timestamp>-<thread id>.jsonl, so the id is
+    // the tail of the stem. Matching "contains" would let the timestamp digits
+    // produce false hits.
+    let id = "019e4172-04bb-7b62-b290-9ecd1e92a41c"
+    T.expect(SessionLocator.isCodexTranscript(
+        filename: "rollout-2026-05-19T23-44-11-\(id).jsonl", sessionID: id), "real rollout name")
+    T.expect(!SessionLocator.isCodexTranscript(
+        filename: "rollout-2026-05-19T23-44-11-\(id)-extra.jsonl", sessionID: id),
+        "id must end the stem")
+    T.expect(!SessionLocator.isCodexTranscript(filename: "\(id).jsonl", sessionID: id),
+             "a Claude-style name is not a rollout")
+    T.expect(!SessionLocator.isCodexTranscript(
+        filename: "rollout-2026-05-19T23-44-11-\(id).jsonl.bak", sessionID: id), "wrong extension")
+    T.expect(!SessionLocator.isCodexTranscript(
+        filename: "rollout-2026-05-19-aaaaaaaa-0000-0000-0000-000000000000.jsonl", sessionID: id),
+        "different thread")
+}
+
+print("\nparseSessionInfo")
+T.test("session id and work dir come back without their annotations") {
+    let text = """
+    slug:          flow-bar-notch
+    name:          Dynamic island surface for flow-bar
+    project:       flow-bar
+    status:        in-progress
+    work_dir:      /Users/p/dev/projects/flow-bar  [known]
+    session_id:            f3f17e0d-e93c-4459-9a1f-19f118824119  [live]
+    session_started:       2026-09-15T20:50:04+05:30
+    updates:
+      - /Users/p/.flow/tasks/flow-bar-notch/updates/a.md
+    kb:
+      - /Users/p/.flow/kb/user.md
+    """
+    let info = FlowClient.parseSessionInfo(slug: "flow-bar-notch", text: text)
+    T.equal(info.sessionID, "f3f17e0d-e93c-4459-9a1f-19f118824119", "session id, no [live]")
+    T.equal(info.workDir, "/Users/p/dev/projects/flow-bar", "work dir, no [known]")
+    T.expect(info.live, "live flag read from the annotation")
+}
+T.test("a bootstrapped-but-dead session is not live") {
+    let info = FlowClient.parseSessionInfo(
+        slug: "x", text: "session_id:            93ac39cb-8ae5-466a-92e3-54c4d6c16856\n")
+    T.equal(info.sessionID, "93ac39cb-8ae5-466a-92e3-54c4d6c16856", "id still parsed")
+    T.expect(!info.live, "no [live] annotation means not live")
+}
+T.test("an unbootstrapped task has no session") {
+    T.expect(FlowClient.parseSessionInfo(slug: "x", text: "session_id:   (none)\n").sessionID == nil,
+             "(none)")
+    T.expect(FlowClient.parseSessionInfo(slug: "x", text: "status: backlog\n").sessionID == nil,
+             "absent line")
+}
+T.test("indented lines never masquerade as fields") {
+    // `updates:`/`kb:` items are indented `- <path>` lines; one of them
+    // containing a colon must not be read as a top-level key.
+    let info = FlowClient.parseSessionInfo(
+        slug: "x", text: "updates:\n  - /tmp/session_id: not-a-field.md\nwork_dir: /tmp/w\n")
+    T.equal(info.workDir, "/tmp/w", "real field still found")
+    T.expect(info.sessionID == nil, "list item ignored")
+}
+T.test("splitAnnotation") {
+    T.equal(FlowClient.splitAnnotation("  /a/b  [known]").value, "/a/b", "value")
+    T.equal(FlowClient.splitAnnotation("  /a/b  [known]").annotation, "known", "annotation")
+    T.equal(FlowClient.splitAnnotation("  plain  ").value, "plain", "no annotation")
+    T.equal(FlowClient.splitAnnotation("  plain  ").annotation, "", "empty annotation")
+    // A path that legitimately ends in a bracket keeps its brackets as the
+    // annotation — acceptable, because neither field can contain one.
+    T.equal(FlowClient.splitAnnotation("").value, "", "empty input")
+}
+
+print("\nRelativeAge")
+let ageBase = Date(timeIntervalSince1970: 1_000_000)
+T.equal(RelativeAge.short(ageBase, now: ageBase), "0s", "just now")
+T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(45)), "45s", "seconds")
+T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(60)), "1m", "one minute")
+T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(3_599)), "59m", "under an hour")
+T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(7_200)), "2h", "hours")
+T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(172_800)), "2d", "days")
+// Clock skew between the transcript's UTC stamp and local time must not render
+// as a negative age.
+T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(-30)), "0s", "future clamps to 0")
 
 T.summarize()

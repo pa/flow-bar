@@ -667,4 +667,86 @@ public struct FlowClient: Sendable {
         let (_, stderr, code) = try Self.run("flow", ["owner", verb, slug])
         return (stderr, code)
     }
+
+    // MARK: Session binding
+
+    /// A task's harness session binding, as reported by `flow show task`.
+    public struct SessionInfo: Equatable, Sendable {
+        public var slug: String
+        /// The harness session id, or nil for a task that was never bootstrapped.
+        public var sessionID: String?
+        public var workDir: String?
+        /// Whether `flow show task` annotated the session id as `[live]`.
+        public var live: Bool
+
+        public init(slug: String, sessionID: String? = nil,
+                    workDir: String? = nil, live: Bool = false) {
+            self.slug = slug; self.sessionID = sessionID
+            self.workDir = workDir; self.live = live
+        }
+    }
+
+    /// Read a task's session binding.
+    ///
+    /// **`flow list tasks --format json` does not emit `session_id`** — its
+    /// fields are slug/name/status/priority/project/age_days/stale/live/
+    /// updated/tags. The binding is only printed by `flow show task <slug>`,
+    /// as text. So resolving transcripts costs one `flow show` per live task;
+    /// that is why callers only resolve tasks flow already reported as `live`,
+    /// which keeps the fan-out to the handful of sessions actually running.
+    public func sessionInfo(_ slug: String) throws -> SessionInfo {
+        let (data, stderr, code) = try Self.run("flow", ["show", "task", slug])
+        guard code == 0 else {
+            throw FlowClientError.commandFailed(
+                command: "flow show task \(slug)", code: code, stderr: stderr)
+        }
+        return Self.parseSessionInfo(slug: slug, text: String(data: data, encoding: .utf8) ?? "")
+    }
+
+    /// Parse the `session_id:` / `work_dir:` lines out of `flow show task`.
+    ///
+    /// Both values carry a trailing bracketed annotation that is status, not
+    /// value — `session_id: <uuid>  [live]`, `work_dir: <path>  [known]` — so
+    /// the suffix is stripped (and, for the session, kept as `live`). Separate
+    /// from `parseShowPaths` rather than folded into it: that function's tuple
+    /// is covered by tests and used by two callers, and widening it for an
+    /// unrelated field would churn both for nothing.
+    public static func parseSessionInfo(slug: String, text: String) -> SessionInfo {
+        var info = SessionInfo(slug: slug)
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+            // Only top-level `key: value` lines; indented lines are list items.
+            guard let first = line.first, first != " ", first != "\t",
+                  let colon = line.firstIndex(of: ":")
+            else { continue }
+            let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
+            let rest = String(line[line.index(after: colon)...])
+            let (value, annotation) = splitAnnotation(rest)
+            switch key {
+            case "session_id":
+                // flow prints `(none)` (or nothing) for an unbootstrapped task.
+                if !value.isEmpty, value != "(none)" {
+                    info.sessionID = value
+                    info.live = (annotation == "live")
+                }
+            case "work_dir":
+                if !value.isEmpty, value != "(none)" { info.workDir = value }
+            default:
+                break
+            }
+        }
+        return info
+    }
+
+    /// Split `"  /some/path  [known]"` into `("/some/path", "known")`.
+    /// A value with no trailing `[...]` comes back with an empty annotation.
+    public static func splitAnnotation(_ raw: String) -> (value: String, annotation: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasSuffix("]"), let open = trimmed.lastIndex(of: "[") else {
+            return (trimmed, "")
+        }
+        let annotation = String(trimmed[trimmed.index(after: open)..<trimmed.index(before: trimmed.endIndex)])
+        let value = String(trimmed[..<open]).trimmingCharacters(in: .whitespaces)
+        return (value, annotation.trimmingCharacters(in: .whitespaces))
+    }
 }

@@ -4,8 +4,11 @@ cask "flow-bar" do
   # with `curl -sL <url> | shasum -a 256` and rewrites this line on every tag.
   sha256 "13f3da65a74c649e414b1206cd4041e5d0ac85c8923c20646e8c8f4774f12238"
 
-  url "https://github.com/pa/flow-bar/archive/refs/tags/v#{version}.tar.gz",
-      verified: "github.com/pa/flow-bar/"
+  # No `verified:` — Homebrew deprecated it for the `url` stanza, and it warned
+  # on every `brew upgrade`. It only ever existed to vouch for a download host
+  # that doesn't match the homepage; ours is github.com/pa/flow-bar in both, so
+  # the default verification already covers this and the parameter was noise.
+  url "https://github.com/pa/flow-bar/archive/refs/tags/v#{version}.tar.gz"
   name "flow-bar"
   desc "Menubar app for the flow dashboard and task switcher"
   homepage "https://github.com/pa/flow-bar"

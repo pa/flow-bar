@@ -6,6 +6,15 @@ import SwiftUI
 /// stable keyboard focus.
 struct SettingsView: View {
     @ObservedObject var store: Store
+    /// Observed separately from the Store: the debounce lives on the monitor,
+    /// and a Store-only observation would leave the slider's own readout stale
+    /// while you drag it.
+    @ObservedObject private var monitor: SessionMonitor
+
+    init(store: Store) {
+        self.store = store
+        self.monitor = store.sessionMonitor
+    }
 
     var body: some View {
         ScrollView {
@@ -41,6 +50,61 @@ struct SettingsView: View {
                         .font(.system(size: 13))
                 }
 
+                section("Session alerts") {
+                    Toggle("Tell me when a session needs input",
+                           isOn: $store.sessionAlertsEnabled)
+                        .font(.system(size: 13))
+                    if store.sessionAlertsEnabled {
+                        hint("The menubar icon turns orange when a Claude or Codex "
+                             + "session behind one of your tasks is stopped waiting for "
+                             + "you. Click it to go straight to Needs-you, and click the "
+                             + "session to land in its terminal.")
+                        Toggle("Pulse the icon", isOn: $store.sessionAlertPulse)
+                            .font(.system(size: 13))
+                        hint(store.sessionAlertPulse
+                             ? "A slow fade, so the icon catches your eye in a row of "
+                               + "small coloured glyphs. Turn it off to keep the orange "
+                               + "tint without the movement."
+                             : "The icon still turns orange — it just won't move.")
+                        // The slider only exists to tune a *guess*. While the
+                        // hook is in effect there is no guess — so showing a
+                        // control that changes nothing would be worse than
+                        // showing none at all.
+                        if monitor.hookActive {
+                            HStack(alignment: .top, spacing: 5) {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.green)
+                                Text("Exact detection — Claude Code tells flow-bar "
+                                     + "the moment a session asks for something, so "
+                                     + "there is no guessing and nothing to tune.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                Text("“Waiting on you” after")
+                                    .font(.system(size: 13))
+                                Slider(value: $monitor.debounce,
+                                       in: SessionMonitor.debounceRange, step: 1)
+                                    .frame(width: 130)
+                                Text("\(Int(monitor.debounce))s")
+                                    .font(.system(size: 12).monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28, alignment: .leading)
+                            }
+                            hint("Fallback only, used while the Claude Code hook isn't "
+                                 + "active: how long a tool call may sit unanswered "
+                                 + "before it's assumed to be a permission prompt. "
+                                 + "Sessions already running when alerts were switched "
+                                 + "on fall back to this until they restart.")
+                        }
+                    } else {
+                        hint("Off by default: this is the only part of flow-bar that "
+                             + "watches anything while the popover is closed.")
+                    }
+                }
+
                 section("About") {
                     HStack {
                         Text("Version").font(.system(size: 13))
@@ -65,7 +129,13 @@ struct SettingsView: View {
         // The toggle's value is captured once at Store init, so re-sync with the
         // real system state whenever Settings is shown — the user may have
         // changed it in System Settings, or macOS may have revoked it.
-        .onAppear { store.refreshLaunchAtLogin() }
+        .onAppear {
+            store.refreshLaunchAtLogin()
+            // The hook can be removed behind our back (another tool rewriting
+            // settings.json), so re-check whenever Settings is shown rather
+            // than trusting what we saw at launch.
+            monitor.refreshHookState()
+        }
         .background(Theme.bg)
         .preferredColorScheme(.dark)
     }

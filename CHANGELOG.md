@@ -3,6 +3,54 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.4.0 — 2026-09-15
+
+### Added — flow-bar tells you when a session is stuck
+
+- **The menubar icon turns orange when a session is waiting on you.** flow-bar
+  now watches the Claude Code and Codex sessions behind your in-progress tasks,
+  and says so when one has stopped and needs a human. Click the icon to land
+  straight on Needs-you, where blocked sessions are listed above everything
+  else, and click one to jump into its terminal. **Opt-in** — Settings ›
+  Session alerts — because it is the only part of flow-bar that observes
+  anything while the popover is closed.
+- **It only fires when you are genuinely blocked.** A permission prompt, a
+  question Claude asked you, a plan waiting for approval, a Codex approval
+  request, or a turn that finished and is waiting for your next message. A slow
+  build is not an alert. Getting this right needed real measurement: in a live
+  session `AskUserQuestion` sat unanswered for 62 minutes while every `Bash`
+  call finished in a 0.1s median — so the two are told apart by *what* is
+  outstanding, not by how long it has been.
+- **Codex sessions too.** flow can bootstrap a task under either harness, and
+  `flow show task` doesn't say which, so flow-bar works it out from where the
+  transcript turns up. Codex is the more forthcoming of the two: it states
+  outright when it is asking for approval and when a turn has ended.
+- **A finished turn behaves like an unread badge** — it counts until you have
+  actually looked, then goes quiet, and the next turn re-arms it. No arbitrary
+  timer deciding you have stopped caring.
+- **The pulse can be switched off.** The icon breathes so it catches your eye
+  in a row of small coloured glyphs; if that grates, turn it off in Settings
+  and it stays orange without moving.
+
+### Fixed
+
+- **`brew upgrade` no longer prints a deprecation warning** on every run. The
+  cask's `url` stanza carried Homebrew's retired `verified:` parameter, which
+  only ever vouched for a download host that differs from the homepage — ours
+  don't differ, so the default verification already covered it.
+
+### Notes
+
+- Switching session alerts on adds **one entry** to `~/.claude/settings.json`,
+  under the `Notification` hook. It is the only exact way to see a permission
+  prompt: Claude Code's transcript records nothing between asking and being
+  answered. `Notification` is informational and cannot allow, deny or delay
+  anything. Your existing hooks are left untouched, the original file is copied
+  to `settings.json.flow-bar.bak`, and switching alerts off removes the entry
+  again.
+- Hooks are read when a session starts, so sessions already running when you
+  enable alerts fall back to a timing heuristic until they restart.
+
 ## v0.3.1 — 2026-09-06
 
 ### Fixed — things that looked like they worked

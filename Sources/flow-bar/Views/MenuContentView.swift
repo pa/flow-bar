@@ -116,6 +116,12 @@ struct MenuContentView: View {
         if store.pendingReminderID != nil {
             section = .reminders
             store.loadReminderLinkTasks()
+        } else if store.pendingAttention {
+            // The menubar icon was alerting, so that alert is why the popover
+            // was opened — go straight to what is blocked. Cleared here rather
+            // than on close: the flag describes this one opening.
+            section = .inbox
+            store.pendingAttention = false
         }
         // Data loading is driven by the AppDelegate (beginActiveRefresh) so it
         // only runs while the popover is open.

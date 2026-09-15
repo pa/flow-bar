@@ -37,6 +37,52 @@ final class Store: ObservableObject {
         didSet { UserDefaults.standard.set(monochromeIcon, forKey: "monochromeIcon") }
     }
 
+    /// Watch live harness sessions and badge the menubar when one is blocked
+    /// waiting for you.
+    ///
+    /// Off by default: it is the one part of the app that observes anything
+    /// while the popover is closed (a kqueue watch per live session), so it is
+    /// opt-in rather than something a user discovers running. `AppDelegate`
+    /// observes this and starts/stops `sessionMonitor` to match.
+    @Published var sessionAlertsEnabled: Bool =
+        UserDefaults.standard.bool(forKey: "sessionAlertsEnabled")
+    {
+        didSet { UserDefaults.standard.set(sessionAlertsEnabled, forKey: "sessionAlertsEnabled") }
+    }
+
+    /// Breathe the menubar icon while a session is blocked, rather than just
+    /// tinting it.
+    ///
+    /// **On by default, and separable from the alert itself.** Motion is what
+    /// makes the icon catch a glance in a row of small coloured glyphs — but
+    /// it's also the part that can grate, and some people will want the signal
+    /// without the movement. Turning this off keeps the orange tint, so no
+    /// information is lost; only the animation stops.
+    @Published var sessionAlertPulse: Bool = Store.loadPulsePreference() {
+        didSet { UserDefaults.standard.set(sessionAlertPulse, forKey: "sessionAlertPulse") }
+    }
+
+    /// Defaults to true when never set.
+    ///
+    /// `bool(forKey:)` can't express that — it returns false for a missing key,
+    /// which would make the default off. Reading the raw object distinguishes
+    /// "absent" from "explicitly false", and does so without depending on a
+    /// `register(defaults:)` call having already run, which matters because the
+    /// Store is built before `applicationDidFinishLaunching`.
+    private static func loadPulsePreference() -> Bool {
+        UserDefaults.standard.object(forKey: "sessionAlertPulse") as? Bool ?? true
+    }
+
+    /// Watches the transcripts behind live tasks. Owned by the Store so both
+    /// Settings and the Needs-you section can read it without reaching into the
+    /// AppDelegate.
+    let sessionMonitor = SessionMonitor()
+
+    /// Set just before the popover opens when a session is blocked, so
+    /// `MenuContentView.prepareForOpen` lands on Needs-you instead of the
+    /// In-progress list. Same mechanism as `pendingReminderID`.
+    @Published var pendingAttention = false
+
     /// The global toggle shortcut; persisted, and re-registered on change.
     @Published var toggleShortcut: Shortcut = .load() {
         didSet {

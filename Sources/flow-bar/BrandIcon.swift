@@ -13,11 +13,39 @@ enum BrandIcon {
 
     static let colored: NSImage = make(template: false)
     static let monochrome: NSImage = make(template: true)
+    /// The attention state: the mark, flat, in the alert colour.
+    static let alerting: NSImage = tinted(.systemOrange)
 
     /// Menubar image — colored gradient, or a monochrome template that
     /// adapts to light/dark when `monochrome` is true.
-    static func menubar(monochrome: Bool) -> NSImage {
-        monochrome ? Self.monochrome : Self.colored
+    ///
+    /// `alerting` overrides both: a session blocked on you is the one thing the
+    /// icon has to be able to say, and it says it by changing colour rather than
+    /// by growing a badge, so no menubar item ever shifts position. It
+    /// deliberately wins over the monochrome preference — that setting is about
+    /// the resting appearance, and an alert that respected it would be invisible.
+    static func menubar(monochrome: Bool, alerting: Bool = false) -> NSImage {
+        if alerting { return Self.alerting }
+        return monochrome ? Self.monochrome : Self.colored
+    }
+
+    /// Recolour the mark, keeping its shape and alpha.
+    ///
+    /// `.sourceAtop` over the existing pixels paints only where the glyph
+    /// already is, so the wave's antialiased edges survive — masking by the
+    /// bounding rect instead would square it off.
+    private static func tinted(_ color: NSColor) -> NSImage {
+        let base = make(template: false)
+        let image = NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        // Not a template: a template image would be recoloured by AppKit to
+        // match the menu bar, throwing the tint away — which is the whole point.
+        image.isTemplate = false
+        return image
     }
 
     private static func make(template: Bool) -> NSImage {
