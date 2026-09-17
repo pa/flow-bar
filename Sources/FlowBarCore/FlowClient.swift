@@ -317,10 +317,11 @@ public struct FlowClient: Sendable {
     /// `--include-archived` is separate and equally opt-in.
     public func listTasks(status: String? = nil, tag: String? = nil,
                           project: String? = nil,
+                          kind: String? = nil,
                           includeDone: Bool = false,
                           includeArchived: Bool = false) throws -> [FlowTask] {
         try decodeJSON([FlowTask].self, Self.listTasksArgs(
-            status: status, tag: tag, project: project,
+            status: status, tag: tag, project: project, kind: kind,
             includeDone: includeDone, includeArchived: includeArchived))
     }
 
@@ -328,12 +329,14 @@ public struct FlowClient: Sendable {
     /// are unit-testable without spawning `flow`.
     public static func listTasksArgs(status: String? = nil, tag: String? = nil,
                                      project: String? = nil,
+                                     kind: String? = nil,
                                      includeDone: Bool = false,
                                      includeArchived: Bool = false) -> [String] {
         var args = ["list", "tasks"]
         if let status { args += ["--status", status] }
         if let tag { args += ["--tag", tag] }
         if let project { args += ["--project", project] }
+        if let kind { args += ["--kind", kind] }
         if includeDone { args += ["--include-done"] }
         if includeArchived { args += ["--include-archived"] }
         args += ["--format", "json"]
@@ -342,6 +345,25 @@ public struct FlowClient: Sendable {
 
     public func inProgressTasks() throws -> [FlowTask] {
         try listTasks(status: "in-progress")
+    }
+
+    /// In-progress tasks *including* playbook runs.
+    ///
+    /// **`flow list tasks` defaults to `--kind regular`, so a playbook run is
+    /// not in the list at all** — not hidden behind a flag like a done task,
+    /// absent. A run has a real session that flow reports `live` and that
+    /// `flow do <run-slug>` switches to, so anything watching live sessions has
+    /// to ask for `--kind all` or it silently ignores every running playbook.
+    ///
+    /// Falls back to the plain list if `--kind` is rejected: the flag is newer
+    /// than flow-bar's floor, and a monitor that goes permanently dark against
+    /// an older flow is a worse failure than one that misses runs.
+    public func inProgressTasksIncludingRuns() throws -> [FlowTask] {
+        do {
+            return try listTasks(status: "in-progress", kind: "all")
+        } catch {
+            return try listTasks(status: "in-progress")
+        }
     }
 
     public func listProjects() throws -> [Project] {
@@ -688,9 +710,29 @@ public struct FlowClient: Sendable {
     /// Switch to a task: focuses its live tab or spawns a new one.
     /// (Phase 3 wires this to the UI; defined here so the bridge is complete.)
     @discardableResult
-    public func doTask(_ slug: String) throws -> (stderr: String, code: Int32) {
-        let (code, output) = try Self.spawnDisclaimed("flow", ["do", slug])  // flow owns the terminal it opens
+    public func doTask(_ slug: String, skipPermissions: Bool = false)
+        throws -> (stderr: String, code: Int32)
+    {
+        // flow owns the terminal it opens
+        let (code, output) = try Self.spawnDisclaimed("flow", Self.doTaskArgs(
+            slug, skipPermissions: skipPermissions))
         return (output, code)
+    }
+
+    /// The argv for `doTask` — split out for the same reason as
+    /// `listTasksArgs`: the flag is the whole behaviour, and it is worth a test
+    /// that does not spawn a terminal.
+    ///
+    /// **`--dangerously-skip-permissions` only reaches the harness on a spawn.**
+    /// When the task's session is already running, `flow do` focuses that tab
+    /// and returns before it ever builds a `claude` command line, so passing the
+    /// flag for a live task is a no-op rather than a mode change — which is the
+    /// property that makes offering it per-click safe.
+    public static func doTaskArgs(_ slug: String,
+                                  skipPermissions: Bool = false) -> [String] {
+        var args = ["do", slug]
+        if skipPermissions { args.append("--dangerously-skip-permissions") }
+        return args
     }
 
     /// Run a playbook. `auto` runs it headlessly in the background (no tab);
@@ -738,11 +780,27 @@ public struct FlowClient: Sendable {
         public var workDir: String?
         /// Whether `flow show task` annotated the session id as `[live]`.
         public var live: Bool
+        /// State of a `flow do --auto` run on this task, if there has been one:
+        /// `running`, `completed` or `dead`. Nil when the task has never been
+        /// run headlessly.
+        public var autoRun: String?
+
+        /// Whether a headless `--auto` session owns this task right now.
+        ///
+        /// Load-bearing for anything that watches sessions: an `--auto` run is
+        /// live, has a transcript, and ends turns like any other session — but
+        /// there is no tab behind it and no human it could be waiting for
+        /// (`--auto` implies `--dangerously-skip-permissions`). Treating it as
+        /// attention-worthy produces an alert nobody can act on, pointing at a
+        /// terminal that does not exist.
+        public var autoRunning: Bool { autoRun == "running" }
 
         public init(slug: String, sessionID: String? = nil,
-                    workDir: String? = nil, live: Bool = false) {
+                    workDir: String? = nil, live: Bool = false,
+                    autoRun: String? = nil) {
             self.slug = slug; self.sessionID = sessionID
             self.workDir = workDir; self.live = live
+            self.autoRun = autoRun
         }
     }
 
@@ -791,6 +849,14 @@ public struct FlowClient: Sendable {
                 }
             case "work_dir":
                 if !value.isEmpty, value != "(none)" { info.workDir = value }
+            case "auto_run":
+                // `running (pid 4821)` / `completed (2026-06-11T20:08:17+05:30)`
+                // / `dead`. Only the leading word is state; the parenthetical is
+                // detail, and `splitAnnotation` leaves it in place because it is
+                // round brackets rather than square ones.
+                if let first = value.split(separator: " ").first, !first.isEmpty {
+                    info.autoRun = String(first)
+                }
             default:
                 break
             }

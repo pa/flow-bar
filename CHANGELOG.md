@@ -3,6 +3,53 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## Unreleased
+
+### Fixed
+
+- **The session that lit the menubar icon no longer vanishes as you open the
+  popover.** Finished turns were marked "seen" in the same breath as showing the
+  panel, so the rows were retired before it was drawn and you arrived at
+  "Nothing needs you" having just clicked an orange icon. Sessions genuinely
+  blocked on a prompt were never affected, which is why it looked intermittent.
+- **A playbook run stopped on a prompt now raises an alert.** It never did.
+  `flow list tasks` leaves playbook runs out unless asked for them, so the
+  watcher's candidate list could not contain one, and a run waiting on you sat
+  there while the menubar said everything was fine. Owner-dispatched tasks were
+  always covered, since they are ordinary tasks carrying an `owner:` tag.
+
+### Added
+
+- **Keyboard navigation with `hjkl`.** Press `Esc` to step out of the search
+  field, then `j`/`k` to move down and up the icon rail, `l` or `Return` to drop
+  into the section, `h` to go back to the rail, and `/` to jump straight to
+  search. The selected icon rings while the keyboard has the rail. Nothing about
+  typing changes: the popover still opens in the search field, and `Esc` a
+  second time still closes it.
+
+### Changed
+
+- **Session alerts now mean one thing: something is waiting for you to answer
+  it.** A permission prompt, a question Claude asked, a plan waiting for
+  approval, a Codex approval request. A finished turn no longer counts, in the
+  icon or in the list — every turn ends, so it was firing constantly and the
+  icon was orange nearly all day. You keep the "you left this one hanging"
+  nudge: when Claude Code itself decides a session has been waiting, it says so
+  through the hook, and that still alerts, in Claude's own words.
+- **Needs-you rows lead with the task slug.** The slug is what you type, what
+  you search on, and the only thing that opens a task, so it now sits on the
+  first line and the task name moves below it. The name is dropped when it says
+  nothing the slug does not, which is what keeps a playbook run at two lines
+  instead of printing its own slug twice.
+- **⌥-click a session row to reopen it with permission prompts skipped.** Only
+  matters when flow-bar actually has to start a session. Clicking a task whose
+  tab is already open just focuses that tab, exactly as before. There is no
+  setting for this on purpose: skipping approvals should be a decision you make
+  at the click, not a switch left on in a window you are not looking at.
+- **Headless `flow do --auto` runs are no longer watched.** They are live and
+  they write transcripts, but there is no tab to jump to and they cannot prompt,
+  so the only alert they could produce is one nobody can act on.
+
 ## v0.4.2 — 2026-09-15
 
 ### Fixed

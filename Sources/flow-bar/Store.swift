@@ -78,6 +78,46 @@ final class Store: ObservableObject {
     /// AppDelegate.
     let sessionMonitor = SessionMonitor()
 
+    // MARK: Keyboard navigation
+
+    /// Which part of the popover the keyboard is driving.
+    ///
+    /// Not a vim mode. The popover still opens with the search field focused
+    /// and typing still filters, exactly as before — this only records that the
+    /// user has stepped *out* of the field with Esc, at which point the bare
+    /// `hjkl` keys are free to mean navigation instead of text.
+    ///
+    /// Phase 1 has two zones. A `.list` zone joins them when the section views
+    /// grow a row cursor.
+    enum KeyZone: Equatable { case search, rail }
+
+    @Published var keyZone: KeyZone = .search
+
+    /// One keyboard navigation command, carrying a sequence number.
+    ///
+    /// The number is load-bearing: `onChange` fires on a *change*, and pressing
+    /// `j` twice produces the same command, which would otherwise be delivered
+    /// once.
+    struct KeyEvent: Equatable {
+        let seq: Int
+        let command: KeyCommand
+    }
+
+    enum KeyCommand: Equatable { case up, down, left, right, activate, focusSearch }
+
+    @Published private(set) var keyEvent: KeyEvent?
+    private var keySeq = 0
+
+    /// Publish a command for `MenuContentView` to apply.
+    ///
+    /// The AppDelegate owns the key monitor because it owns the popover's
+    /// lifetime, but the rail's selection is view state — so the monitor names
+    /// an intent and the view decides what it means for the section it is on.
+    func emitKey(_ command: KeyCommand) {
+        keySeq += 1
+        keyEvent = KeyEvent(seq: keySeq, command: command)
+    }
+
     /// Set just before the popover opens when a session is blocked, so
     /// `MenuContentView.prepareForOpen` lands on Needs-you instead of the
     /// In-progress list. Same mechanism as `pendingReminderID`.
@@ -705,13 +745,33 @@ final class Store: ObservableObject {
     /// new one. We dismiss the popover IMMEDIATELY (so the click feels
     /// instant) and run `flow do` fire-and-forget in the background; no
     /// post-switch refresh (the next poll/open picks up any change).
+    /// Whether this open should ask flow for `--dangerously-skip-permissions`.
+    ///
+    /// **A held ⌥ at click time, and nothing else — deliberately not a setting.**
+    /// A persistent "always skip permissions" toggle is a dangerous mode whose
+    /// state lives in a window you are not looking at when you click, and the
+    /// thing it suppresses is the one prompt that stops a command you did not
+    /// mean to run. A modifier can only ever apply to the open you are making,
+    /// which is the same reason the app keeps every terminal-spawning action
+    /// explicit (see "Read-mostly philosophy" in CLAUDE.md).
+    ///
+    /// Safe to read on every path, including keyboard Enter: `flow do` drops
+    /// the flag whenever it focuses an existing tab rather than spawning, so on
+    /// a live task — which is most of this list — holding ⌥ changes nothing.
+    nonisolated static func skipPermissionsRequested() -> Bool {
+        NSEvent.modifierFlags.contains(.option)
+    }
+
     func switchTo(_ slug: String) {
+        // Read the modifier before dismissing, while the click that got us here
+        // is still the current event.
+        let skip = Self.skipPermissionsRequested()
         Self.dismissPopover()
         spawningOps += 1
         Task {
             do {
                 let res = try await Task.detached(priority: .userInitiated) {
-                    try FlowClient().doTask(slug)
+                    try FlowClient().doTask(slug, skipPermissions: skip)
                 }.value
                 self.spawningOps -= 1
                 if res.code == 0 {
@@ -752,6 +812,8 @@ final class Store: ObservableObject {
         // an empty set. This `let` is load-bearing.
         let batch = slugs
         guard !batch.isEmpty else { return }
+        // Same modifier, same moment, before the dismiss below.
+        let skip = Self.skipPermissionsRequested()
         // One task: reuse the proven single path (its flash/error handling is
         // already exactly right, and there is nothing to aggregate).
         if batch.count == 1 { switchTo(batch[0]); return }
@@ -779,7 +841,7 @@ final class Store: ObservableObject {
             // So each task gets the terminal to itself: open it, wait for
             // `flow do` to return, then let the session settle before the next.
             for slug in batch {
-                let outcome = await Self.doTaskOffThread(slug)
+                let outcome = await Self.doTaskOffThread(slug, skipPermissions: skip)
                 self.spawningOps -= 1
                 switch outcome {
                 case .ok:            succeeded += 1
@@ -830,11 +892,13 @@ final class Store: ObservableObject {
     ///
     /// Carries a `String`, not an `Error`: `Result<_, Error>` won't cross the
     /// concurrency boundary under Swift 6 strict checking.
-    nonisolated private static func doTaskOffThread(_ slug: String) async -> BatchOutcome {
+    nonisolated private static func doTaskOffThread(
+        _ slug: String, skipPermissions: Bool = false
+    ) async -> BatchOutcome {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let res = try FlowClient().doTask(slug)
+                    let res = try FlowClient().doTask(slug, skipPermissions: skipPermissions)
                     if res.code == 0 { cont.resume(returning: .ok) }
                     else if isLiveSessionGuard(res.stderr) { cont.resume(returning: .alreadyOpen) }
                     else { cont.resume(returning: .failed(res.stderr)) }

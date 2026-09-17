@@ -676,6 +676,13 @@ T.equal(FlowClient.listTasksArgs(tag: "swift", includeDone: true, includeArchive
 T.equal(FlowClient.listTasksArgs(status: "in-progress"),
         ["list", "tasks", "--status", "in-progress", "--format", "json"],
         "in-progress poll is unchanged")
+// A playbook run is not hidden behind a flag the way a done task is — it is
+// absent from `flow list tasks` entirely until `--kind` asks for it. The
+// session watcher must ask; the Tasks list must not (it would mix synthetic
+// run rows into the switcher).
+T.equal(FlowClient.listTasksArgs(status: "in-progress", kind: "all"),
+        ["list", "tasks", "--status", "in-progress", "--kind", "all", "--format", "json"],
+        "session watcher asks for playbook runs too")
 
 let drillIn = [
     task("done-high", status: "done", priority: "high"),
@@ -1424,6 +1431,22 @@ T.test("indented lines never masquerade as fields") {
     T.equal(info.workDir, "/tmp/w", "real field still found")
     T.expect(info.sessionID == nil, "list item ignored")
 }
+T.test("a headless --auto run is identified as one") {
+    // `flow do --auto` sessions are live and write transcripts, but have no tab
+    // and cannot prompt — the watcher drops them rather than raising an alert
+    // pointing at a terminal that does not exist.
+    let running = FlowClient.parseSessionInfo(slug: "x", text: """
+    session_id:            93ac39cb-8ae5-466a-92e3-54c4d6c16856  [live]
+    auto_run:              running (pid 48213)
+    """)
+    T.expect(running.autoRunning, "running (pid …) is an active auto run")
+    let finished = FlowClient.parseSessionInfo(
+        slug: "x", text: "auto_run:              completed (2026-06-11T20:08:17+05:30)\n")
+    T.equal(finished.autoRun, "completed", "state is the leading word only")
+    T.expect(!finished.autoRunning, "a completed auto run no longer owns the task")
+    T.expect(!FlowClient.parseSessionInfo(slug: "x", text: "status: in-progress\n").autoRunning,
+             "a task that was never run headlessly has no auto run")
+}
 T.test("splitAnnotation") {
     T.equal(FlowClient.splitAnnotation("  /a/b  [known]").value, "/a/b", "value")
     T.equal(FlowClient.splitAnnotation("  /a/b  [known]").annotation, "known", "annotation")
@@ -1445,5 +1468,65 @@ T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(172_800)), "2
 // Clock skew between the transcript's UTC stamp and local time must not render
 // as a negative age.
 T.equal(RelativeAge.short(ageBase, now: ageBase.addingTimeInterval(-30)), "0s", "future clamps to 0")
+
+print("\nSessionAttention")
+// Only "a human has to answer this" is reported. A finished turn is how every
+// turn ends, so counting it made the icon and the list permanently full.
+let turnEnd = Date(timeIntervalSince1970: 1_700_000_000)
+
+T.expect(SessionAttention.isBlocked(.waitingOnYou(tool: "AskUserQuestion", since: turnEnd)),
+         "a question Claude asked you blocks")
+T.expect(SessionAttention.isBlocked(.waitingOnYou(tool: "ExitPlanMode", since: turnEnd)),
+         "a plan waiting for approval blocks")
+T.expect(SessionAttention.isBlocked(.waitingOnYou(tool: "permission_prompt", since: turnEnd)),
+         "a permission prompt blocks")
+// The route that keeps "Claude is waiting for my input" reportable without
+// reporting every turn boundary: Claude Code decides, and says so via the hook.
+T.expect(SessionAttention.isBlocked(.waitingOnYou(tool: "idle_prompt", since: turnEnd)),
+         "a hook idle_prompt blocks — Claude itself said it is waiting")
+T.expect(SessionAttention.isBlocked(.waitingOnYou(tool: "agent_needs_input", since: turnEnd)),
+         "…as does agent_needs_input")
+
+T.expect(!SessionAttention.isBlocked(.awaitingPrompt(since: turnEnd)),
+         "a bare finished turn is NOT an alert")
+T.expect(!SessionAttention.isBlocked(.awaitingPrompt(since: nil)), "…dated or not")
+T.expect(!SessionAttention.isBlocked(.working(tool: "Bash", since: turnEnd)), "working")
+T.expect(!SessionAttention.isBlocked(.thinking(since: turnEnd)), "thinking")
+T.expect(!SessionAttention.isBlocked(.unknown), "unknown")
+
+print("\nSessionRowLabel")
+// Session rows lead with the slug — what you type and what `flow do` takes —
+// so the name is demoted to a subtitle that has to earn its line.
+T.equal(SessionRowLabel.secondary(
+            slug: "flow-bar-attention",
+            name: "flow-bar: opening permissions, session-alert coverage, slug-first labels"),
+        "flow-bar: opening permissions, session-alert coverage, slug-first labels",
+        "a real title earns its line")
+T.expect(SessionRowLabel.secondary(slug: "scrut-evidence", name: "scrut-evidence") == nil,
+         "a task named after its own slug adds nothing")
+T.expect(SessionRowLabel.secondary(slug: "scrut-evidence", name: "Scrut Evidence") == nil,
+         "…and punctuation/case are not information")
+// flow names a run task "<playbook> run <run-slug>", which is the first line
+// twice over — this is what keeps a playbook-run row at two lines.
+T.expect(SessionRowLabel.secondary(
+            slug: "ms-update--2026-09-16-06-41",
+            name: "ms-update run ms-update--2026-09-16-06-41") == nil,
+         "a playbook run's synthetic name is all slug")
+T.expect(SessionRowLabel.secondary(slug: "x", name: "   ") == nil, "blank name")
+T.equal(SessionRowLabel.secondary(slug: "frammer-eol-packages",
+                                  name: "  Retire EoL packages  "),
+        "Retire EoL packages", "subtitle is trimmed")
+// One novel token is enough: the slug can carry most of the name and still
+// leave something worth reading.
+T.equal(SessionRowLabel.secondary(slug: "flow-bar", name: "flow-bar notch"),
+        "flow-bar notch", "one new word is enough")
+
+print("\ndoTaskArgs")
+T.equal(FlowClient.doTaskArgs("flow-bar-attention"),
+        ["do", "flow-bar-attention"],
+        "a plain open passes no mode flag")
+T.equal(FlowClient.doTaskArgs("flow-bar-attention", skipPermissions: true),
+        ["do", "flow-bar-attention", "--dangerously-skip-permissions"],
+        "⌥-click asks flow to skip permission prompts")
 
 T.summarize()

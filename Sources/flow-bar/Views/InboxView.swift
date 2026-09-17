@@ -14,10 +14,10 @@ struct InboxView: View {
         self.sessions = store.sessionMonitor
     }
 
-    /// Sessions blocked on a prompt right now. Empty unless session alerts are
+    /// Sessions stopped until you answer them. Empty unless session alerts are
     /// on, since nothing is being watched otherwise.
     private var blocked: [SessionMonitor.Row] {
-        store.sessionAlertsEnabled ? sessions.attentionRows : []
+        store.sessionAlertsEnabled ? sessions.blockedRows : []
     }
 
     var body: some View {
@@ -38,7 +38,8 @@ struct InboxView: View {
         let overdue = m.inProgress.filter { $0.isOverdue }.sortedByPriority()
         let waiting = m.inProgress.filter { $0.isWaiting && !$0.isOverdue }.sortedByPriority()
         let blocked = self.blocked
-        let empty = m.questions.isEmpty && overdue.isEmpty && waiting.isEmpty && blocked.isEmpty
+        let empty = m.questions.isEmpty && overdue.isEmpty && waiting.isEmpty
+            && blocked.isEmpty
 
         return Group {
             if empty {
@@ -102,9 +103,21 @@ struct InboxView: View {
                         .fill(Color.orange)
                         .frame(width: 7, height: 7)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(row.title)
+                        // The slug leads: it is what you type, what you search
+                        // on, and the only thing `flow do` takes. A row titled
+                        // by task name makes you translate before you can act.
+                        Text(row.slug)
                             .font(.system(size: 13, weight: .medium))
                             .lineLimit(1)
+                        // Only when the name says something the slug doesn't —
+                        // which keeps a playbook run at two lines instead of
+                        // spending a third on its own slug again.
+                        if let subtitle = row.subtitle {
+                            Text(subtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                         HStack(spacing: 4) {
                             if let project = row.project, !project.isEmpty {
                                 Text(project).foregroundStyle(.tertiary)
@@ -141,7 +154,11 @@ struct InboxView: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 4)
-            .help("\(row.slug) — click to focus its \(row.harness.label) tab")
+            // The slug is on the row now, so the tooltip spends its words on
+            // what a click does — including the modifier, which has nowhere
+            // else to announce itself.
+            .help("Click to focus its \(row.harness.label) tab"
+                  + " · ⌥-click to reopen skipping permission prompts")
             .onHover { isHovering = $0 }
         }
     }

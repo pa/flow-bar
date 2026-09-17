@@ -35,8 +35,9 @@ final class SessionMonitor: ObservableObject {
         /// The task slug — stable across refreshes, and what `flow do` takes.
         let id: String
         let slug: String
-        let title: String
-        /// The harness session id — what alerts and seen-markers are keyed by.
+        /// The task's name. Only ever a *subtitle* now — see `subtitle`.
+        let name: String
+        /// The harness session id — what hook alerts are keyed by.
         let sessionID: String
         /// Project name, or nil for a floating task.
         let project: String?
@@ -49,6 +50,11 @@ final class SessionMonitor: ObservableObject {
 
         /// What the row says it is doing.
         var statusText: String { alert ?? activity.label }
+
+        /// The task name, when it says something the slug doesn't. Nil for a
+        /// task named after its own slug and for every playbook run, whose name
+        /// is just "<playbook> run <run-slug>". See `SessionRowLabel`.
+        var subtitle: String? { SessionRowLabel.secondary(slug: slug, name: name) }
     }
 
     /// Live sessions, most-demanding first.
@@ -113,55 +119,15 @@ final class SessionMonitor: ObservableObject {
         if isRunning { recompute() }
     }
 
-    /// Turn-ends the user has already been shown, keyed by session id.
+    /// Sessions stopped until you answer them. Drives the menubar icon.
     ///
-    /// A finished turn needs you — the session sits doing nothing until you
-    /// type — but unlike a permission prompt it stays finished *forever*, so it
-    /// can't simply badge on its own or every session you ever walked away from
-    /// would light the icon permanently.
-    ///
-    /// An earlier attempt time-boxed it to five minutes. That was arbitrary and
-    /// wrong in practice: a turn that ended six minutes ago still wants you, and
-    /// the session that prompted this fix was sitting at exactly 5m. What
-    /// actually retires the signal is *having seen it*, so this behaves like an
-    /// unread badge — cleared when the popover opens, and re-armed by the next
-    /// turn end, because the value stored is the turn's own timestamp.
-    private var seenTurnEnds: [String: Date] = [:]
-
-    /// Whether a row wants the user right now.
-    ///
-    /// Broader than `SessionActivity.needsAttention`, which is only ever the
-    /// hard block: this adds a finished turn you haven't seen yet. `working` and
-    /// `thinking` never qualify — they're the normal condition of a session you
-    /// started on purpose.
-    func needsYou(_ row: Row) -> Bool {
-        if row.activity.needsAttention { return true }
-        if case .awaitingPrompt(let since) = row.activity, let since {
-            return seenTurnEnds[row.sessionID] != since
-        }
-        return false
-    }
-
-    /// The sessions that want you, most demanding first. Drives the menubar
-    /// alert and the Needs-you list.
-    var attentionRows: [Row] { boundRows.filter { needsYou($0) } }
-
-    /// Mark every currently-finished turn as seen.
-    ///
-    /// Called when the popover opens: that is the moment the user is looking at
-    /// the list, so anything merely idle has done its job. A hard block is NOT
-    /// cleared here — it stays lit until it is actually resolved.
-    func markTurnEndsSeen() {
-        var changed = false
-        for row in boundRows {
-            if case .awaitingPrompt(let since) = row.activity, let since,
-               seenTurnEnds[row.sessionID] != since {
-                seenTurnEnds[row.sessionID] = since
-                changed = true
-            }
-        }
-        if changed { recompute() }
-    }
+    /// **Deliberately narrower than what the list shows.** An icon that is lit
+    /// most of the day is not a signal, and a finished turn is the normal end
+    /// of every turn — measured on this machine, 8 of 12 live sessions were
+    /// sitting at one. The genuinely-idle case still reaches here when Claude
+    /// Code raises `idle_prompt` through the hook; it just no longer fires on
+    /// every turn boundary.
+    var blockedRows: [Row] { boundRows.filter { SessionAttention.isBlocked($0.activity) } }
 
     // MARK: State
 
@@ -387,7 +353,12 @@ final class SessionMonitor: ObservableObject {
 
         let tasks: [FlowTask]
         do {
-            tasks = try client.inProgressTasks()
+            // Playbook runs included: a run is a task with a real session that
+            // `flow do <run-slug>` switches to, and `flow list tasks` leaves it
+            // out unless asked. An owner's work needs no special case — the
+            // tasks an owner dispatches are ordinary `kind=regular` rows tagged
+            // `owner:<slug>`, so they are already here.
+            tasks = try client.inProgressTasksIncludingRuns()
         } catch {
             result.error = "could not read tasks: \(error)"
             return result
@@ -404,6 +375,12 @@ final class SessionMonitor: ObservableObject {
         for task in tasks where task.isLive {
             guard let info = try? client.sessionInfo(task.slug),
                   let sessionID = info.sessionID,
+                  // A headless `--auto` run is live and writes a transcript, but
+                  // it has no tab to focus and cannot prompt, so every state it
+                  // reaches is one no human can act on. Watching it would buy
+                  // exactly one thing: a "your turn" alert on a session nobody
+                  // can type into. See `SessionInfo.autoRunning`.
+                  !info.autoRunning,
                   let located = SessionLocator.locate(sessionID: sessionID)
             else { continue }
             result.bound.append(BoundSession(slug: task.slug, name: task.name,
@@ -469,7 +446,7 @@ final class SessionMonitor: ObservableObject {
 
             boundOut.append(Row(id: session.slug,
                                 slug: session.slug,
-                                title: session.name.isEmpty ? session.slug : session.name,
+                                name: session.name,
                                 sessionID: session.sessionID,
                                 project: session.project,
                                 harness: session.harness,
@@ -480,21 +457,23 @@ final class SessionMonitor: ObservableObject {
         // machine left running overnight doesn't accumulate them.
         let liveIDs = Set(bound.map(\.sessionID))
         alerts = alerts.filter { liveIDs.contains($0.key) }
-        seenTurnEnds = seenTurnEnds.filter { liveIDs.contains($0.key) }
 
         // Attention first, then alphabetically so the list doesn't reshuffle on
-        // every keystroke a session makes.
+        // every keystroke a session makes. By slug, because that is what the
+        // row leads with — sorting on a string the eye never reads first is how
+        // a list looks unsorted.
         boundOut.sort {
             $0.activity.rank != $1.activity.rank
                 ? $0.activity.rank < $1.activity.rank
-                : $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                : $0.slug.localizedCaseInsensitiveCompare($1.slug) == .orderedAscending
         }
 
         boundRows = boundOut
-        attentionCount = boundOut.filter { needsYou($0) }.count
+        // Icon budget: hard blocks only. See `blockedRows`.
+        attentionCount = boundOut.filter { SessionAttention.isBlocked($0.activity) }.count
         if Self.verbose {
             FlowClient.log("sessions: recompute \(boundOut.map { "\($0.id):\($0.activity.label)" }) "
-                           + "needsYou=\(attentionCount) watches=\(transcriptWatches.count)")
+                           + "blocked=\(attentionCount) watches=\(transcriptWatches.count)")
         }
 
         armTransitionTimer(now: now, thresholds: th)

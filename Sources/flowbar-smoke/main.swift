@@ -74,7 +74,9 @@ do {
 print("\nLive sessions:\n")
 
 do {
-    let tasks = try client.inProgressTasks().filter(\.isLive)
+    // Mirrors SessionMonitor.resolveOffThread: playbook runs included (they are
+    // absent from the default list), headless --auto runs dropped.
+    let tasks = try client.inProgressTasksIncludingRuns().filter(\.isLive)
     if tasks.isEmpty {
         print("  (no live sessions — start one with `flow do <slug>` to exercise this)")
     }
@@ -82,6 +84,10 @@ do {
         let info = try client.sessionInfo(t.slug)
         guard let sessionID = info.sessionID else {
             print("  \(t.slug): live, but flow reports no session_id  ← unexpected")
+            continue
+        }
+        if info.autoRunning {
+            print("  \(t.slug): headless --auto run — not watched (no tab, cannot prompt)")
             continue
         }
         guard let located = SessionLocator.locate(sessionID: sessionID) else {

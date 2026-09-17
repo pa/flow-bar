@@ -28,8 +28,9 @@ on that basis; it exists for the source-install path.) The harness lives in
 `Sources/flowbar-tests` (see `T` in `Harness.swift`) and covers the pure
 `FlowBarCore` logic: model decoding, `filtered`/`sorted` helpers, the
 owners/tags text parsers, `DashboardMetrics`, the markdown block parser,
-the drill-in list flags/split, and the session watcher's transcript parsers
-(Claude + Codex), locator and session-id parser. Run `swift run flowbar-tests`.
+the drill-in list flags/split, the session watcher's transcript parsers
+(Claude + Codex), locator and session-id parser, the `--kind`/`--auto` coverage
+rules, and the slug-first row label. Run `swift run flowbar-tests`.
 
 `build-app.sh` produces `flow-bar.app` (gitignored). To relaunch after a
 rebuild, kill the old instance first:
@@ -52,13 +53,18 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
   - `FlowClient.swift` — binary discovery (+ a generous PATH so GUI launches
     find `flow`/`claude`), `Process` runner, entity reads (JSON; owners/tags
     via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions,
-    and `sessionInfo`/`parseSessionInfo` (a task's harness session binding).
+    and `sessionInfo`/`parseSessionInfo` (a task's harness session binding plus
+    the state of any `flow do --auto` run on it).
   - `SessionTranscript.swift` — `TranscriptParser` folds Claude Code session
     JSONL into a `SessionActivity`, plus `TranscriptTime` (a hand-rolled
     ISO-8601 scanner). Pure and incremental, so the harness covers it.
   - `SessionTail.swift` — `SessionLocator` (session id → transcript file) and
     `TranscriptTail` (delta reads over one transcript).
   - `RelativeAge.swift` — compact `4s` / `2m` / `1h` ages for session rows.
+  - `SessionRowLabel.swift` — decides whether a task name earns its own line
+    under the slug on a session row.
+  - `SessionAttention.swift` — `isBlocked`: the single predicate behind the
+    icon and the Needs-you session list.
 - **`flow-bar`** (executable): the SwiftUI app.
   - `FlowBarApp.swift` — an AppKit `NSStatusItem` + `NSPopover` driven from an
     `AppDelegate` (NOT `MenuBarExtra`, which can't re-render the icon while the
@@ -98,6 +104,11 @@ The Tasks list is in-progress only, and every in-progress task has a
 live, or spawns a new one**. flow's terminal backend needs a one-time macOS
 **Accessibility** grant; that's expected. We deliberately do NOT reimplement
 the spawn (hand-rolling a resume can't focus a specific existing tab).
+
+Hold ⌥ while clicking (or pressing Enter) to add
+`--dangerously-skip-permissions`. It only reaches the harness when `flow do`
+actually spawns, so it is a no-op on a task whose tab is already open. See
+"Session alerts" for why this is a modifier and not a preference.
 
 ## Session alerts
 
@@ -144,12 +155,22 @@ row reads "flow-bar-notch - waiting on you".
      `permissions.allow` rule auto-approved raises no prompt, yet the debounce
      would fire on it. The Settings slider is therefore hidden while the hook is
      active: a control that changes nothing is worse than no control.
-  Separately, a **finished turn you haven't seen** also counts (`needsYou`) -
-  the session is sitting idle until you type. It behaves like an unread badge,
-  cleared when the popover opens (`markTurnEndsSeen`) and re-armed by the next
-  turn end, because the stored value is the turn's own timestamp. A five-minute
-  window was tried first and was simply wrong: a turn that ended six minutes ago
-  still wants you.
+  **A finished turn is not an alert** (`SessionAttention.isBlocked`). The
+  transcript's `awaitingPrompt` only says the assistant stopped talking, which
+  is how every turn ends: measured on this machine, 8 of 12 live sessions were
+  sitting at one, so reporting them kept both the icon and the list permanently
+  full. The alert means "a human has to answer this" and nothing else. The
+  genuinely-waiting case is not lost, it just arrives by the other route -
+  Claude Code raises `idle_prompt` / `agent_needs_input` through the hook when
+  *it* judges a session is waiting, and those become `waitingOnYou` with
+  Claude's own wording.
+  An earlier design badged finished turns and tracked which ones you had seen
+  (`seenTurnEnds` / `markTurnEndsSeen`) so the icon could clear itself. Both are
+  gone, and the bug they produced is worth remembering: marking seen ran in the
+  same runloop turn as `popover.show`, so the rows were retired before SwiftUI
+  laid the panel out and you clicked an orange icon to arrive at "Nothing needs
+  you". Only hard blocks survived it, which made it look intermittent. Once a
+  finished turn is not reported at all, there is nothing left to clear.
   Measured on a real transcript: `AskUserQuestion` sat unanswered for 62
   minutes while every `Bash` in the same session finished in a 0.1s median and
   a 10.3s max. The populations don't overlap, so guessing between them was
@@ -173,6 +194,55 @@ row reads "flow-bar-notch - waiting on you".
   Session-alerts toggle goes on, removed when it goes off.
 - **Only flow-managed sessions count.** Every row goes somewhere, and `flow do`
   needs a slug; an unmanaged session has nowhere to go.
+- **The watched set is "live sessions a human can reach", which is not the same
+  as "in-progress tasks".** Four kinds of work carry a session, and they do not
+  all qualify.
+  - *Regular tasks* qualify. This was the whole candidate set until v0.4.3.
+  - *Playbook runs* qualify, and used to be invisible.
+    `flow list tasks` defaults to `--kind regular`, and a run is not hidden
+    behind a flag the way a done task is, it is absent. So `inProgressTasks()`
+    could never return one, and a run stopped on a permission prompt sat there
+    while the icon said all clear. A run is a task: it has a session flow
+    reports `live`, and `flow do <run-slug>` switches to it exactly like any
+    other. `inProgressTasksIncludingRuns()` passes `--kind all`, and falls back
+    to the plain list if an older flow rejects the flag, because a watcher that
+    goes permanently dark is worse than one that misses runs.
+  - *Owner-managed tasks* need no special case. An owner dispatches ordinary
+    `kind=regular` tasks tagged `owner:<slug>`, so they were already in the set.
+  - *Headless runs are excluded on purpose.* `flow do --auto` is live and writes
+    a transcript, but there is no tab to focus and `--auto` implies
+    `--dangerously-skip-permissions`, so it cannot raise a prompt. The only
+    state it can reach that looks like attention is a finished turn, and nobody
+    can type into it. `parseSessionInfo` reads the `auto_run:` line from
+    `flow show task` and the watcher drops anything `running`. Owner ticks are
+    the same shape: headless, no tab, and no task of their own to jump to.
+- **⌥-click reopens with permission prompts skipped, and that is deliberately
+  not a setting.** A persistent "always skip permissions" toggle is a dangerous
+  mode whose state lives in a window you are not looking at when you click, and
+  what it suppresses is the prompt that stops a command you did not mean to run.
+  A modifier applies to one open and nothing else. It is also safe to read on
+  every click path, Enter included, because `flow do` returns as soon as it
+  focuses an existing tab: the flag never reaches `claude` for a live task, so
+  on most of this list holding ⌥ changes nothing at all. Where it does matter is
+  an in-progress task whose session has died, which `flow do` resumes by
+  spawning `claude --resume <id>`.
+- **Skipping permissions makes detection sharper, not blinder.** In
+  `bypassPermissions`, `TranscriptParser.mayPrompt` goes false and the inferred
+  debounce stops firing, which is right: there is no prompt for a slow tool to
+  be waiting on. Everything exact survives. `AskUserQuestion` and `ExitPlanMode`
+  still block with no debounce, Codex still emits `*_approval_request`, and the
+  hook's matcher still covers `idle_prompt` and `agent_needs_input`. Only
+  `permission_prompt` disappears, which is the point of the mode.
+- **Rows lead with the slug.** The name went where it belongs, on a second line,
+  and only when it earns one. The slug is what you type, what you search on, and
+  the only string `flow do` takes, so a row titled by task name made you
+  translate before you could act. `SessionRowLabel.secondary` drops a name that
+  contributes no word the slug does not already carry, which covers a task named
+  after its own slug and every playbook run, whose name is "<playbook> run
+  <run-slug>". Sorting moved to the slug for the same reason: sorting on a
+  string the eye never reads first looks unsorted. Cost is about 13pt on rows
+  that do show a subtitle (43pt to 56pt), so roughly eight fit the Needs-you
+  pane instead of ten, and the list already scrolls.
 - **Both harnesses.** flow bootstraps under Claude Code *or* Codex
   (`flow do --harness`), and `flow show task` does NOT say which - so it is
   inferred from where the transcript turns up: a Claude session id is a whole
@@ -199,6 +269,46 @@ row reads "flow-bar-notch - waiting on you".
   default it off; a `register(defaults:)` would also be too late, since the
   Store is built before `applicationDidFinishLaunching`.
 - Trace it with `defaults write cloud.facets.flow-bar sessionWatchVerbose -bool true`.
+
+## Keyboard navigation
+
+`hjkl` moves between the rail and the pane. **It is not a vim mode**, and the
+distinction is the whole design: the popover still opens with the search field
+focused and typing still filters, exactly as before. `Esc` steps *out* of the
+field, and only then are the bare letters free to mean navigation.
+
+- `Esc` in a text field leaves it (rail zone). `Esc` again closes the popover -
+  the popover is `.transient`, so declining the event is all that takes.
+- In the rail: `j`/`k` move between sections and switch **live**, so `j`/`k` is
+  a preview and `l` means "act in here" rather than "commit this choice". `h`
+  returns to the rail from anywhere, `l` / `Return` hands the keyboard to the
+  pane, `/` jumps straight to search.
+- The selected rail icon draws a ring only while `store.keyZone == .rail`, so
+  the zone is visible without adding chrome a mouse user would see.
+
+Two implementation notes that are easy to get wrong:
+
+- **A local `NSEvent` monitor, not `.onKeyPress`.** `.onKeyPress` only fires for
+  the focused view, so using it here means fighting the search field for focus
+  on every keystroke. The monitor (`AppDelegate.installKeyMonitor`, same
+  lifetime and same shape as the outside-click monitor) sits ahead of the
+  responder chain and declines what it doesn't want - return the event to pass
+  it on, nil to swallow it.
+- **`window.firstResponder is NSTextView` is the load-bearing guard.** SwiftUI's
+  `TextField` edits through an `NSTextView` field editor, so that single test
+  covers search, the task intake form and the reminder form without naming any
+  of them, and it means a missed zone transition can never leave the user unable
+  to type. Chorded keys are declined outright; only bare letters are ours.
+- `onSectionChange` takes `refocusSearch:` because the `.tasks` case refocuses
+  the search field 50ms later. Keyboard rail movement must pass `false`, or
+  moving onto In-progress yanks focus back into the field you just left.
+
+Phase 1 is the rail. A `.list` zone with a row cursor (`j`/`k` through the rows,
+`Return` to open, `Space` to add to the batch selection) is the next step, and
+is the larger half: no section view has a cursor today, so each of `TasksView`,
+`InboxView`, `ProjectsView`, `PlaybooksView`, `OwnersView`, `TagsView` and
+`RemindersView` has to expose its visible ordered rows and render one
+highlighted, behind a shared protocol.
 
 ## Gotchas
 
