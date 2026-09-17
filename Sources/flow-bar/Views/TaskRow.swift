@@ -89,6 +89,42 @@ struct TaskRow: View {
             }
         }
         .padding(.trailing, 4)
+        .contextMenu { rowMenu }
+    }
+
+    /// The right-click menu.
+    ///
+    /// **This exists to make the permission choice visible.** ⌥-click already
+    /// opened a task with `--dangerously-skip-permissions`, but a modifier you
+    /// can only learn from a tooltip is not a choice — and because the flag is
+    /// inert on a task whose tab is still open, the first attempt is likely to
+    /// land on a live task and look broken. Here the option is named, and on a
+    /// live task it is disabled with the reason, which teaches the rule instead
+    /// of leaving it to be guessed.
+    @ViewBuilder
+    private var rowMenu: some View {
+        Button("Open") { onOpen(skipPermissions: false) }
+            .disabled(!canOpen)
+        Button("Open, skipping permission prompts") { onOpen(skipPermissions: true) }
+            .disabled(!canOpen || task.isLive)
+        if canOpen, task.isLive {
+            // A session's permission mode is fixed when its process starts, so
+            // there is nothing to apply it to while the tab is open.
+            Text("Already running — close its tab to choose a mode")
+        }
+        if let onPeek {
+            Divider()
+            Button("View brief") { onPeek() }
+        }
+        if let onRemind {
+            Button("Remind me") { onRemind() }
+        }
+    }
+
+    /// Open through the same path the row's click uses, but with the mode
+    /// stated rather than read from the keyboard.
+    private func onOpen(skipPermissions: Bool) {
+        Store.shared.switchTo(task.slug, skipPermissions: skipPermissions)
     }
 
     private var mainButton: some View {
@@ -207,6 +243,7 @@ struct TaskRow: View {
             return "\(task.isArchived ? "Archived" : "Done") — open the brief to review"
         }
         var parts: [String] = []
+        parts.append("right-click for open options")
         if task.isLive { parts.append("live session — its terminal tab is still open") }
         if task.isWaiting { parts.append(waitingHelp) }
         if task.isStale { parts.append(staleHelp) }

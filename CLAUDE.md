@@ -105,10 +105,20 @@ live, or spawns a new one**. flow's terminal backend needs a one-time macOS
 **Accessibility** grant; that's expected. We deliberately do NOT reimplement
 the spawn (hand-rolling a resume can't focus a specific existing tab).
 
-Hold ⌥ while clicking (or pressing Enter) to add
-`--dangerously-skip-permissions`. It only reaches the harness when `flow do`
-actually spawns, so it is a no-op on a task whose tab is already open. See
-"Session alerts" for why this is a modifier and not a preference.
+**Choosing the permission mode.** The row's right-click menu offers *Open* and
+*Open, skipping permission prompts*; ⌥-click does the latter too. The flag
+reaches the harness on both spawn paths — a first bootstrap
+(`claude --session-id …`) and a resume of a task whose tab was closed
+(`claude --resume …`) — but **not** when `flow do` focuses a tab that is still
+running, because it returns before building a command line at all. A session's
+permission mode is a property of its process, so that is not a gap to close:
+the menu disables the item on a live task and says why.
+
+Deliberately not a setting. A persistent "always skip" is a dangerous mode whose
+state lives in a window you are not looking at when you click, and what it
+suppresses is the prompt that stops a command you did not mean to run. The menu
+exists because a modifier alone is invisible, and because the flag being inert
+on live tasks means a first attempt very often lands on one and looks broken.
 
 ## Session alerts
 

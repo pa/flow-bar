@@ -27,7 +27,12 @@ see what's in flight and switch between tasks without leaving the menubar.
 - **Overview dashboard** — exact, at-a-glance metrics: in-progress / backlog /
   done, overdue, stale, live, plus owners, runs, and projects. Tiles are
   clickable and route to the relevant view.
-- **Needs you** — owner questions, overdue, and waiting tasks in one list.
+- **Session alerts** — the menubar icon turns orange when a Claude or Codex
+  session is stopped waiting for you: a permission prompt, a question, a plan
+  awaiting approval. Opt-in, and deliberately silent about a session that has
+  merely finished a turn.
+- **Needs you** — blocked sessions, owner questions, overdue, and waiting tasks
+  in one list.
 - **Projects** — per-project breakdown; drill in to see a project's tasks.
 - **Playbooks** — run status and recent runs; open a run in the terminal or
   trigger a new run (new tab or background).
@@ -137,10 +142,11 @@ terminal. **zellij** needs no macOS permission; the AppleScript terminals
 also **Accessibility**). You grant that once — flow-bar keeps a stable code
 signature so the grant survives upgrades.
 
-Hold **⌥** while you click or press Enter to start the session with
-`--dangerously-skip-permissions`. It applies to that one open and nothing else,
-and only when a session actually has to be started — focusing a tab that is
-already open ignores it.
+**Right-click a task** to choose how it opens: *Open*, or *Open, skipping
+permission prompts*. The second is disabled while the task's tab is still
+running, because a session's permission mode is fixed when its process starts —
+close the tab and open it again to change it. Holding **⌥** while you click or
+press Enter does the same thing.
 
 ## Architecture
 

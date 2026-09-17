@@ -3,7 +3,7 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
-## Unreleased
+## v0.4.3 — 2026-09-17
 
 ### Fixed
 
@@ -23,6 +23,14 @@ the GitHub release notes when a version is tagged.
   there while the menubar said everything was fine. Owner-dispatched tasks were
   always covered, since they are ordinary tasks carrying an `owner:` tag.
 
+### Added
+
+- **Right-click a task to choose how it opens.** "Open" or "Open, skipping
+  permission prompts" — the second is disabled on a task whose tab is still
+  running, with the reason, because a session's permission mode is fixed when
+  its process starts. ⌥-click still does the same thing for anyone who prefers
+  the modifier.
+
 ### Changed
 
 - **Session alerts now mean one thing: something is waiting for you to answer
@@ -37,11 +45,6 @@ the GitHub release notes when a version is tagged.
   first line and the task name moves below it. The name is dropped when it says
   nothing the slug does not, which is what keeps a playbook run at two lines
   instead of printing its own slug twice.
-- **⌥-click a task to open it with permission prompts skipped.** Only matters
-  when flow-bar actually has to start a session — clicking a task whose tab is
-  already open just focuses that tab, exactly as before. There is no setting for
-  this on purpose: skipping approvals should be a decision you make at the
-  click, not a switch left on in a window you are not looking at.
 - **Opening a playbook shows its runs first.** Its brief moved to a button in
   the header, next to Run, and each run already had its own. The two levels are
   now reachable from the rows they describe instead of from one block of

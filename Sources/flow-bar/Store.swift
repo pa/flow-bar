@@ -731,10 +731,13 @@ final class Store: ObservableObject {
         NSEvent.modifierFlags.contains(.option)
     }
 
-    func switchTo(_ slug: String) {
+    /// - Parameter skipPermissions: nil asks the keyboard — a held ⌥ at click
+    ///   time. A menu item passes the answer explicitly instead, because by the
+    ///   time its action runs the modifier that opened the menu is long gone.
+    func switchTo(_ slug: String, skipPermissions: Bool? = nil) {
         // Read the modifier before dismissing, while the click that got us here
         // is still the current event.
-        let skip = Self.skipPermissionsRequested()
+        let skip = skipPermissions ?? Self.skipPermissionsRequested()
         Self.dismissPopover()
         spawningOps += 1
         Task {
