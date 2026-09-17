@@ -168,15 +168,22 @@ struct MenuContentView: View {
 
     // MARK: Pane
 
-    @ViewBuilder
+    /// Whether something is covering the section pane.
+    private var overlayShown: Bool { store.isCreating || store.peekedSlug != nil }
+
+    /// **The section pane is always in the hierarchy, even while covered.**
+    ///
+    /// The brief peek and the intake form used to *replace* it, which destroyed
+    /// the section view and every `@State` it owned. The visible symptom was
+    /// that reading a playbook's brief and pressing Back returned you to the
+    /// playbooks list rather than to the playbook you were in: `selected` had
+    /// been thrown away with the view. Projects, Tags and Owners all had it too.
+    ///
+    /// Layering keeps that state alive. The covered pane is hidden and disabled
+    /// rather than removed, so it cannot take clicks or hold the text cursor
+    /// while something is on top of it.
     private var pane: some View {
-        if store.isCreating {
-            // Task intake takes over the whole content pane (its own header).
-            CreateView(store: store)
-        } else if let slug = store.peekedSlug {
-            // Brief peek takes over the whole content pane (its own header).
-            TaskDetailView(store: store, slug: slug)
-        } else {
+        ZStack {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 if section.isSearchable {
@@ -190,6 +197,17 @@ struct MenuContentView: View {
                 }
                 Divider()
                 footer
+            }
+            .opacity(overlayShown ? 0 : 1)
+            .disabled(overlayShown)
+            .accessibilityHidden(overlayShown)
+
+            if store.isCreating {
+                // Task intake takes over the whole content pane (its own header).
+                CreateView(store: store)
+            } else if let slug = store.peekedSlug {
+                // Brief peek takes over the whole content pane (its own header).
+                TaskDetailView(store: store, slug: slug)
             }
         }
     }

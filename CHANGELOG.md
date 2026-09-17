@@ -12,6 +12,11 @@ the GitHub release notes when a version is tagged.
   panel, so the rows were retired before it was drawn and you arrived at
   "Nothing needs you" having just clicked an orange icon. Sessions genuinely
   blocked on a prompt were never affected, which is why it looked intermittent.
+- **Back from a brief returns where you were.** Reading a playbook's brief and
+  pressing Back dropped you on the playbooks list instead of the playbook you
+  had open; the same happened in Projects, Tags and Owners. The brief was
+  replacing the section rather than covering it, which threw away where you
+  were standing.
 - **A playbook run stopped on a prompt now raises an alert.** It never did.
   `flow list tasks` leaves playbook runs out unless asked for them, so the
   watcher's candidate list could not contain one, and a run waiting on you sat

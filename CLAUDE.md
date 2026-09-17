@@ -383,6 +383,19 @@ Building locally is the entire point.
   major. If that regresses, the app still works — it just silently stops being
   native, which is exactly the failure nobody notices.
 
+## Panes and overlays
+
+**The section pane stays in the view hierarchy while the brief peek or the
+intake form covers it** (`MenuContentView.pane` is a `ZStack`, not an
+if/else). Replacing it destroys the section view and every `@State` it owns.
+The symptom was that reading a playbook's brief and pressing Back returned you
+to the playbooks list rather than to the playbook you were in — `selected` had
+gone with the view. Projects, Tags and Owners each had it too.
+
+The covered pane is hidden with `opacity(0)` and `.disabled`, not removed, so
+it keeps its state but cannot take clicks or hold the text cursor underneath
+whatever is on top of it.
+
 ## Playbooks
 
 Opening a playbook leads with its **runs**. Its own brief is a button in the
