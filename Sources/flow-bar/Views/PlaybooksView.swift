@@ -48,7 +48,6 @@ struct PlaybooksView: View {
                         ForEach(playbooks) { p in
                             Button {
                                 selected = p
-                                store.loadPlaybookDetail(p.slug)
                             } label: { row(p) }
                                 .buttonStyle(.plain)
                         }
@@ -87,7 +86,6 @@ struct PlaybooksView: View {
             HStack(spacing: 4) {
                 Button {
                     selected = nil
-                    store.clearPlaybookDetail()
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left").font(.system(size: 13))
@@ -95,6 +93,18 @@ struct PlaybooksView: View {
                     }
                 }.buttonStyle(.plain)
                 Spacer()
+                // The playbook's own brief, beside the action it belongs with.
+                // Its runs each carry their own brief button, so the two levels
+                // are reachable from the rows they describe rather than from one
+                // block of markdown above everything.
+                Button { store.peekBrief(p.slug, kind: .playbook) } label: {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("View this playbook's brief and notes")
                 Menu {
                     Button("Run in a new tab") { store.runPlaybook(p.slug) }
                     Button("Run in background (--auto)") { store.runPlaybook(p.slug, auto: true) }
@@ -109,9 +119,11 @@ struct PlaybooksView: View {
             .padding(.horizontal, 10).padding(.vertical, 6)
             Divider()
 
+            // **Runs first.** You open a playbook to see whether it ran and
+            // what it did; the procedure is reference material, and a full
+            // brief used to push the runs off the bottom of a 560pt popover.
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    briefSection
                     runsSection(rs)
                 }
                 .padding(12)
@@ -120,51 +132,8 @@ struct PlaybooksView: View {
         }
     }
 
-    /// The playbook's own `brief.md` + `updates/` notes — the same content, the
-    /// same markdown renderer and the same note tiles a task's detail gets. A
-    /// playbook's procedure and its cross-run observations are the point of
-    /// opening it; the run list alone never showed them.
-    @ViewBuilder
-    private var briefSection: some View {
-        if store.playbookDetailLoading, store.playbookDetail == nil {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity)
-        } else if let d = store.playbookDetail {
-            let brief = TaskDetailView.dropLeadingTitle(d.brief)
-            if brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("No brief written for this playbook yet.")
-                    .font(.system(size: 14)).foregroundStyle(.secondary)
-            } else {
-                MarkdownText(brief)
-            }
-            if !d.updates.isEmpty {
-                Divider().padding(.vertical, 2)
-                Text("PLAYBOOK NOTES")
-                    .font(.system(size: 12, weight: .bold)).foregroundStyle(.tertiary)
-                ForEach(d.updates) { u in updateBlock(u) }
-            }
-        }
-    }
-
-    private func updateBlock(_ u: TaskUpdate) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(u.date)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                Text(u.title)
-                    .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
-            }
-            MarkdownText(TaskDetailView.dropLeadingTitle(u.content))
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.tile)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
     @ViewBuilder
     private func runsSection(_ rs: [PlaybookRun]) -> some View {
-        Divider().padding(.vertical, 2)
         HStack(spacing: 6) {
             Text("RUNS").font(.system(size: 12, weight: .bold)).foregroundStyle(.tertiary)
             Text("\(rs.count)").font(.system(size: 12)).foregroundStyle(.tertiary)

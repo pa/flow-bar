@@ -270,46 +270,6 @@ row reads "flow-bar-notch - waiting on you".
   Store is built before `applicationDidFinishLaunching`.
 - Trace it with `defaults write cloud.facets.flow-bar sessionWatchVerbose -bool true`.
 
-## Keyboard navigation
-
-`hjkl` moves between the rail and the pane. **It is not a vim mode**, and the
-distinction is the whole design: the popover still opens with the search field
-focused and typing still filters, exactly as before. `Esc` steps *out* of the
-field, and only then are the bare letters free to mean navigation.
-
-- `Esc` in a text field leaves it (rail zone). `Esc` again closes the popover -
-  the popover is `.transient`, so declining the event is all that takes.
-- In the rail: `j`/`k` move between sections and switch **live**, so `j`/`k` is
-  a preview and `l` means "act in here" rather than "commit this choice". `h`
-  returns to the rail from anywhere, `l` / `Return` hands the keyboard to the
-  pane, `/` jumps straight to search.
-- The selected rail icon draws a ring only while `store.keyZone == .rail`, so
-  the zone is visible without adding chrome a mouse user would see.
-
-Two implementation notes that are easy to get wrong:
-
-- **A local `NSEvent` monitor, not `.onKeyPress`.** `.onKeyPress` only fires for
-  the focused view, so using it here means fighting the search field for focus
-  on every keystroke. The monitor (`AppDelegate.installKeyMonitor`, same
-  lifetime and same shape as the outside-click monitor) sits ahead of the
-  responder chain and declines what it doesn't want - return the event to pass
-  it on, nil to swallow it.
-- **`window.firstResponder is NSTextView` is the load-bearing guard.** SwiftUI's
-  `TextField` edits through an `NSTextView` field editor, so that single test
-  covers search, the task intake form and the reminder form without naming any
-  of them, and it means a missed zone transition can never leave the user unable
-  to type. Chorded keys are declined outright; only bare letters are ours.
-- `onSectionChange` takes `refocusSearch:` because the `.tasks` case refocuses
-  the search field 50ms later. Keyboard rail movement must pass `false`, or
-  moving onto In-progress yanks focus back into the field you just left.
-
-Phase 1 is the rail. A `.list` zone with a row cursor (`j`/`k` through the rows,
-`Return` to open, `Space` to add to the batch selection) is the next step, and
-is the larger half: no section view has a cursor today, so each of `TasksView`,
-`InboxView`, `ProjectsView`, `PlaybooksView`, `OwnersView`, `TagsView` and
-`RemindersView` has to expose its visible ordered rows and render one
-highlighted, behind a shared protocol.
-
 ## Gotchas
 
 - **macOS 15+.** The floor is set by the source-install path: Swift 6
@@ -422,6 +382,17 @@ Building locally is the entire point.
   installed binary's `LC_BUILD_VERSION` sdk major must equal the runner's OS
   major. If that regresses, the app still works — it just silently stops being
   native, which is exactly the failure nobody notices.
+
+## Playbooks
+
+Opening a playbook leads with its **runs**. Its own brief is a button in the
+header beside Run, and each run row already carried one — so both levels are
+reachable from the row they describe. The brief used to render inline above the
+runs, which pushed them off the bottom of a 560pt popover.
+
+`Store.peekBrief(_:kind:)` takes the entity kind because a task and a playbook
+render identically in the peek but are read with different `flow show`
+subcommands.
 
 ## Read-mostly philosophy
 

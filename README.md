@@ -130,10 +130,6 @@ Click the menubar **w** (or press your global hotkey — default **⌥⌘F**):
 - **＋** in the header opens the intake form to create a task (or a new project).
 - The footer switches the active **flow root** and **terminal backend**, and the
   ⚙︎ gear opens **Settings** (hotkey, launch-at-login, icon, updates).
-- **Keyboard:** `Esc` leaves the search field, then `j`/`k` move up and down the
-  rail, `l` (or `Return`) drops into the section, `h` goes back to the rail, and
-  `/` returns to search. `Esc` again closes the popover. Typing is unaffected —
-  the popover still opens ready to search.
 
 Opening a task runs `flow do`, which opens or focuses its session in your chosen
 terminal. **zellij** needs no macOS permission; the AppleScript terminals

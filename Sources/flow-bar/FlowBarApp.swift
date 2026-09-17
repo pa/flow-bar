@@ -155,7 +155,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     /// When the popover last closed, used to swallow the phantom reopen below.
     private var lastPopoverCloseAt: Date = .distantPast
-    private var keyMonitor: Any?
 
     /// How close to a dismissal an open request has to be to count as the tail
     /// of the same click.
@@ -198,7 +197,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.contentViewController?.view.window?.makeKey()
         store.beginActiveRefresh()
         installOutsideClickMonitor()
-        installKeyMonitor()
     }
 
     /// Show the popover (without toggling it closed) and bump `openNonce` so
@@ -236,67 +234,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    /// Watch key presses for as long as the popover is up.
-    ///
-    /// A **local** monitor rather than SwiftUI's `.onKeyPress`: that only fires
-    /// for the focused view, so it would mean fighting the search field for
-    /// focus on every keystroke. A monitor sits ahead of the responder chain
-    /// and can simply decline the events it does not want. Same lifetime and
-    /// same pattern as the outside-click monitor below.
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.popover.isShown else { return event }
-            // Returning nil swallows the event; returning it passes it on.
-            return self.handleNavKey(event) ? nil : event
-        }
-    }
-
-    private func removeKeyMonitor() {
-        if let m = keyMonitor {
-            NSEvent.removeMonitor(m)
-            keyMonitor = nil
-        }
-    }
-
-    /// Whether this key was navigation. Everything else is declined untouched.
-    private func handleNavKey(_ event: NSEvent) -> Bool {
-        let window = popover.contentViewController?.view.window
-        // **The one guard that keeps every text field typeable.** SwiftUI's
-        // TextField edits through an NSTextView field editor, so this single
-        // test covers search, the task intake form and the reminder form
-        // without naming any of them — and means a missed zone transition can
-        // never leave the user unable to type.
-        let editing = window?.firstResponder is NSTextView
-
-        if event.keyCode == 53 {                     // Esc
-            guard editing else { return false }      // second Esc closes the popover
-            // Step out of the field rather than dismissing. This is the only
-            // existing behaviour the feature changes.
-            window?.makeFirstResponder(nil)
-            store.keyZone = .rail
-            return true
-        }
-        guard !editing else { return false }
-        // Leave every chord alone; only bare letters are ours.
-        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
-            return false
-        }
-        if event.keyCode == 36 {                     // Return
-            store.emitKey(.activate)
-            return true
-        }
-        switch event.charactersIgnoringModifiers {
-        case "h": store.emitKey(.left)
-        case "j": store.emitKey(.down)
-        case "k": store.emitKey(.up)
-        case "l": store.emitKey(.right)
-        case "/": store.emitKey(.focusSearch)
-        default:  return false
-        }
-        return true
-    }
-
     private func installOutsideClickMonitor() {
         guard outsideClickMonitor == nil else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
@@ -320,7 +257,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // mouse-down, and the button's action then arrives on mouse-up.
         lastPopoverCloseAt = Date()
         removeOutsideClickMonitor()
-        removeKeyMonitor()
         store.endActiveRefresh()
     }
 

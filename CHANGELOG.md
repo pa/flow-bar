@@ -18,15 +18,6 @@ the GitHub release notes when a version is tagged.
   there while the menubar said everything was fine. Owner-dispatched tasks were
   always covered, since they are ordinary tasks carrying an `owner:` tag.
 
-### Added
-
-- **Keyboard navigation with `hjkl`.** Press `Esc` to step out of the search
-  field, then `j`/`k` to move down and up the icon rail, `l` or `Return` to drop
-  into the section, `h` to go back to the rail, and `/` to jump straight to
-  search. The selected icon rings while the keyboard has the rail. Nothing about
-  typing changes: the popover still opens in the search field, and `Esc` a
-  second time still closes it.
-
 ### Changed
 
 - **Session alerts now mean one thing: something is waiting for you to answer
@@ -41,11 +32,15 @@ the GitHub release notes when a version is tagged.
   first line and the task name moves below it. The name is dropped when it says
   nothing the slug does not, which is what keeps a playbook run at two lines
   instead of printing its own slug twice.
-- **⌥-click a session row to reopen it with permission prompts skipped.** Only
-  matters when flow-bar actually has to start a session. Clicking a task whose
-  tab is already open just focuses that tab, exactly as before. There is no
-  setting for this on purpose: skipping approvals should be a decision you make
-  at the click, not a switch left on in a window you are not looking at.
+- **⌥-click a task to open it with permission prompts skipped.** Only matters
+  when flow-bar actually has to start a session — clicking a task whose tab is
+  already open just focuses that tab, exactly as before. There is no setting for
+  this on purpose: skipping approvals should be a decision you make at the
+  click, not a switch left on in a window you are not looking at.
+- **Opening a playbook shows its runs first.** Its brief moved to a button in
+  the header, next to Run, and each run already had its own. The two levels are
+  now reachable from the rows they describe instead of from one block of
+  markdown that pushed the runs off the bottom.
 - **Headless `flow do --auto` runs are no longer watched.** They are live and
   they write transcripts, but there is no tab to jump to and they cannot prompt,
   so the only alert they could produce is one nobody can act on.

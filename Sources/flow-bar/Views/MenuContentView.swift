@@ -94,10 +94,6 @@ struct MenuContentView: View {
         .onChange(of: store.openNonce) { prepareForOpen() }
         // A task's "Remind me" bell seeds a draft while the popover is open —
         // jump to the Reminders section so its compose form appears.
-        .onChange(of: store.keyEvent) { _, ev in
-            guard let ev else { return }
-            applyKey(ev.command)
-        }
         .onChange(of: store.pendingReminderDraft?.id) { _, id in
             guard id != nil else { return }
             store.closePeek(); store.cancelCreate()
@@ -110,7 +106,6 @@ struct MenuContentView: View {
     /// popover open (the view is reused, so this is signalled via openNonce).
     private func prepareForOpen() {
         store.closePeek(); store.cancelCreate()
-        store.keyZone = .search
         section = .tasks
         taskFilter = .inProgress
         taskSort = .priority
@@ -133,56 +128,6 @@ struct MenuContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
     }
 
-    // MARK: Keyboard navigation
-
-    /// Apply one navigation command from the key monitor.
-    ///
-    /// The monitor names an intent (`down`) rather than a target, because what
-    /// "down" means depends on which zone has the keyboard — and the zone is
-    /// view state. Phase 1 only implements the rail; `right` therefore hands
-    /// the keyboard back to the pane's search field, which is what "go into the
-    /// tab" means until the section views grow a row cursor.
-    private func applyKey(_ command: Store.KeyCommand) {
-        switch command {
-        case .left:
-            store.keyZone = .rail
-        case .down where store.keyZone == .rail:
-            moveRail(by: 1)
-        case .up where store.keyZone == .rail:
-            moveRail(by: -1)
-        case .right, .activate:
-            guard store.keyZone == .rail else { return }
-            focusPane()
-        case .focusSearch:
-            focusPane()
-        case .up, .down:
-            return   // no row cursor yet — phase 2
-        }
-    }
-
-    /// Step the rail selection, switching the section live as it moves.
-    ///
-    /// Live rather than waiting for Enter: it makes `j`/`k` a preview, so `l`
-    /// can mean "I want to act in here" rather than "commit this choice", which
-    /// is the shape the rail already has for a mouse.
-    private func moveRail(by delta: Int) {
-        let all = Section.allCases
-        guard let i = all.firstIndex(of: section) else { return }
-        let next = min(max(i + delta, 0), all.count - 1)
-        guard next != i else { return }
-        store.closePeek(); store.cancelCreate()
-        section = all[next]
-        // Do NOT let the section change steal focus back into the search field:
-        // the whole point of the rail zone is that the keyboard stays here.
-        onSectionChange(all[next], refocusSearch: false)
-    }
-
-    /// Hand the keyboard to the content pane.
-    private func focusPane() {
-        store.keyZone = .search
-        searchFocused = true
-    }
-
     // MARK: Rail
 
     private var rail: some View {
@@ -198,14 +143,6 @@ struct MenuContentView: View {
                         .frame(maxWidth: .infinity, minHeight: 32)
                         .foregroundStyle(section == s ? Color.accentColor : .secondary)
                         .railSelection(isSelected: section == s)
-                        // A ring only while the keyboard owns the rail, so the
-                        // zone is visible without adding chrome for mouse users.
-                        .overlay {
-                            if section == s, store.keyZone == .rail {
-                                RoundedRectangle(cornerRadius: 7)
-                                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
-                            }
-                        }
                         .overlay(alignment: .topTrailing) {
                             if let n = railBadge(s), n > 0 {
                                 Text("\(n)")
@@ -497,17 +434,13 @@ struct MenuContentView: View {
         }
     }
 
-    /// - Parameter refocusSearch: false when the keyboard is driving the rail,
-    ///   so moving onto In-progress doesn't yank focus back into the field the
-    ///   user just stepped out of.
-    private func onSectionChange(_ s: Section, refocusSearch: Bool = true) {
+    private func onSectionChange(_ s: Section) {
         query = ""
         switch s {
         case .dashboard, .inbox, .playbooks, .projects, .owners, .tags: store.refreshMetrics()
         case .reminders: store.loadReminderLinkTasks()   // populate the link picker
         case .tasks:
             store.refresh()
-            guard refocusSearch else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
         }
     }

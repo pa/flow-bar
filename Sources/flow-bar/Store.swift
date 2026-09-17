@@ -78,46 +78,6 @@ final class Store: ObservableObject {
     /// AppDelegate.
     let sessionMonitor = SessionMonitor()
 
-    // MARK: Keyboard navigation
-
-    /// Which part of the popover the keyboard is driving.
-    ///
-    /// Not a vim mode. The popover still opens with the search field focused
-    /// and typing still filters, exactly as before — this only records that the
-    /// user has stepped *out* of the field with Esc, at which point the bare
-    /// `hjkl` keys are free to mean navigation instead of text.
-    ///
-    /// Phase 1 has two zones. A `.list` zone joins them when the section views
-    /// grow a row cursor.
-    enum KeyZone: Equatable { case search, rail }
-
-    @Published var keyZone: KeyZone = .search
-
-    /// One keyboard navigation command, carrying a sequence number.
-    ///
-    /// The number is load-bearing: `onChange` fires on a *change*, and pressing
-    /// `j` twice produces the same command, which would otherwise be delivered
-    /// once.
-    struct KeyEvent: Equatable {
-        let seq: Int
-        let command: KeyCommand
-    }
-
-    enum KeyCommand: Equatable { case up, down, left, right, activate, focusSearch }
-
-    @Published private(set) var keyEvent: KeyEvent?
-    private var keySeq = 0
-
-    /// Publish a command for `MenuContentView` to apply.
-    ///
-    /// The AppDelegate owns the key monitor because it owns the popover's
-    /// lifetime, but the rail's selection is view state — so the monitor names
-    /// an intent and the view decides what it means for the section it is on.
-    func emitKey(_ command: KeyCommand) {
-        keySeq += 1
-        keyEvent = KeyEvent(seq: keySeq, command: command)
-    }
-
     /// Set just before the popover opens when a session is blocked, so
     /// `MenuContentView.prepareForOpen` lands on Needs-you instead of the
     /// In-progress list. Same mechanism as `pendingReminderID`.
@@ -411,13 +371,22 @@ final class Store: ObservableObject {
     }
 
     /// Open the brief peek for a task and load its brief + recent updates.
-    func peekBrief(_ slug: String) {
+    /// Which kind of thing the open brief belongs to.
+    ///
+    /// A task and a playbook both have a `brief.md` and `updates/`, and the
+    /// peek renders them identically — but they are read with different `flow
+    /// show` subcommands, so the caller has to say which.
+    enum PeekKind: Equatable { case task, playbook }
+
+    func peekBrief(_ slug: String, kind: PeekKind = .task) {
         peekedSlug = slug
         taskDetail = nil
         taskDetailLoading = true
         Task {
             let d = try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().taskDetail(slug)
+                let client = FlowClient()
+                return kind == .playbook ? try client.playbookDetail(slug)
+                                         : try client.taskDetail(slug)
             }.value
             // Ignore if the user closed the peek or opened a different one.
             guard self.peekedSlug == slug else { return }
