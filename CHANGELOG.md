@@ -61,6 +61,11 @@ the GitHub release notes when a version is tagged.
 
 ### Changed
 
+- **The flow-root switcher is hidden under praxis.** A flow root is flow's
+  whole store, so switching one swaps every task, project and playbook at once.
+  praxis has no equivalent — its agent directory is a harness profile set once
+  in Settings, not something you flip between while triaging — so the footer
+  control goes away rather than offering a single choice that does nothing.
 - **`prx` is found at `~/.local/bin/prx` without being configured.** That is
   where the harness installs itself, so the common case now needs no path in
   Settings at all; a PATH lookup remains the fallback, and an explicit **prx

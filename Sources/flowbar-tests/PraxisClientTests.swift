@@ -353,6 +353,24 @@ func runPraxisClientTests() {
         T.equal(Backend.active().kind, .praxis, "factory follows the setting")
     }
 
+    T.test("capabilities declare what each backend actually has") {
+        // The rule the whole UI leans on: a concept the backend does not have
+        // is HIDDEN, not shown empty or faked.
+        T.expect(BackendCapabilities.flow.workRoots,
+                 "a flow root is flow's whole store, so switching between them is real")
+        T.expect(!BackendCapabilities.praxis.workRoots,
+                 "praxis has no work roots — its agent dir is set once, so no picker")
+        T.expect(BackendCapabilities.flow.playbooks, "playbooks are flow's")
+        T.expect(!BackendCapabilities.praxis.playbooks, "praxis has none")
+        T.expect(!BackendCapabilities.praxis.stats, "no `flow stats` equivalent")
+        // Both HAVE recurring agents; they are named differently, which is a
+        // label difference rather than a missing feature.
+        T.expect(BackendCapabilities.praxis.recurring, "schedules stand in for owners")
+        T.equal(BackendCapabilities.praxis.recurringTitle, "Schedules", "named as praxis names it")
+        T.expect(!BackendCapabilities.praxis.recurringHasForegroundRun,
+                 "a praxis schedule run is always detached")
+    }
+
     T.test("prx resolves to the standard install path by default") {
         let defaults = UserDefaults.standard
         let previous = defaults.string(forKey: praxisBinaryKey)

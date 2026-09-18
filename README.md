@@ -38,7 +38,8 @@ see what's in flight and switch between tasks without leaving the menubar.
 | Recurring agents | Owners (`flow owner`) | Schedules (`prx schedule`) |
 | Playbooks & runs | yes | — *(pane hidden)* |
 | AI-memory stats | `flow stats` | — *(card hidden)* |
-| Switch to a task | `flow do <slug>` | a `.command` that execs `prx -work <slug>` |
+| Work roots | named `FLOW_ROOT`s, switchable | — *(picker hidden; one agent dir)* |
+| Switch to a task | `flow do <slug>` | a `.command` that execs `prx -resume`/`-work` |
 
 What praxis has no equivalent of is **hidden, not faked** — an empty pane that
 can never fill is worse than no pane. The praxis path needs a `prx` that has
