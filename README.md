@@ -19,7 +19,9 @@ see what's in flight and switch between tasks without leaving the menubar.
 > `flow` — it reads your tasks through `flow … --format json` and switches to
 > them with `flow do`. It can also be pointed at the **praxis harness**
 > (`prx`), which keeps the same concepts natively; pick one under
-> **Settings → Work source**. Either way, the CLI needs to be on your `PATH`.
+> **Settings → Work source**. flow-bar finds `prx` at `~/.local/bin/prx`, where
+> it installs itself, and otherwise looks on your `PATH`; the **prx binary**
+> field overrides both when yours lives elsewhere.
 
 ## Two backends
 

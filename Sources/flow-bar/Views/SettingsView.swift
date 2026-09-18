@@ -270,7 +270,7 @@ struct SettingsView: View {
                    + "a task goes to its existing session, or resumes it.")
 
             if store.backendKind == .praxis {
-                pathRow("prx binary", placeholder: "find prx on PATH",
+                pathRow("prx binary", placeholder: "~/.local/bin/prx",
                         text: $store.praxisBinary)
                 pathRow("Agent directory", placeholder: "~/.praxis/agent",
                         text: $store.praxisAgentDir)
