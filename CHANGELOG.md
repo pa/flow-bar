@@ -7,7 +7,12 @@ the GitHub release notes when a version is tagged.
 
 ### Added
 
-- **Pick your work source: `flow` or the praxis harness (`prx`).** Settings gained
+- **Pick your work source: `flow` or the praxis harness (`prx`)** — behind an
+  experiment flag, because the praxis path is not GA:
+  `defaults write cloud.facets.flow-bar experimentalPraxisBackend -bool true`.
+  Without it nothing changes: the picker is hidden and the app is `flow`, even
+  if a praxis selection is already stored. Clearing the flag is therefore a
+  complete way back rather than a half-migration. With it, Settings gains
   a **Work source** section. On praxis, tasks, projects, briefs, notes and tags
   come from `prx work … -json`, and flow's owners are replaced by praxis
   schedules (`prx schedule … -json`) — same pane, named the way your CLI names

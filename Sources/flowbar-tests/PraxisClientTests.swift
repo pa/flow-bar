@@ -336,9 +336,13 @@ func runPraxisClientTests() {
     T.test("backend selection defaults to flow and round-trips") {
         let defaults = UserDefaults.standard
         let previous = defaults.string(forKey: workBackendKey)
+        let previousFlag = defaults.object(forKey: praxisBackendFlagKey)
+        defaults.set(true, forKey: praxisBackendFlagKey)
         defer {
             if let previous { defaults.set(previous, forKey: workBackendKey) }
             else { defaults.removeObject(forKey: workBackendKey) }
+            if let previousFlag { defaults.set(previousFlag, forKey: praxisBackendFlagKey) }
+            else { defaults.removeObject(forKey: praxisBackendFlagKey) }
         }
         defaults.removeObject(forKey: workBackendKey)
         T.equal(Backend.kind, .flow, "absent setting → flow, so an existing install is unchanged")
@@ -347,5 +351,35 @@ func runPraxisClientTests() {
         defaults.set("praxis", forKey: workBackendKey)
         T.equal(Backend.kind, .praxis, "praxis selected")
         T.equal(Backend.active().kind, .praxis, "factory follows the setting")
+    }
+
+    T.test("the praxis backend is gated off until the experiment flag is set") {
+        let defaults = UserDefaults.standard
+        let previousFlag = defaults.object(forKey: praxisBackendFlagKey)
+        let previousPick = defaults.string(forKey: workBackendKey)
+        defer {
+            if let previousFlag { defaults.set(previousFlag, forKey: praxisBackendFlagKey) }
+            else { defaults.removeObject(forKey: praxisBackendFlagKey) }
+            if let previousPick { defaults.set(previousPick, forKey: workBackendKey) }
+            else { defaults.removeObject(forKey: workBackendKey) }
+        }
+
+        // Someone who tried praxis and then lost the flag must not be stuck on
+        // it: the flag wins over the stored selection, so turning it off is a
+        // complete way back.
+        defaults.set("praxis", forKey: workBackendKey)
+        defaults.removeObject(forKey: praxisBackendFlagKey)
+        T.expect(!Backend.praxisAvailable, "absent flag -> unavailable")
+        T.equal(Backend.kind, .flow, "a stored praxis pick is ignored while the flag is off")
+        T.equal(Backend.active().kind, .flow, "and the factory hands back the flow client")
+        T.equal(Backend.selectable, [.flow], "a picker offers nothing to choose")
+
+        defaults.set(false, forKey: praxisBackendFlagKey)
+        T.equal(Backend.kind, .flow, "explicitly false is off too")
+
+        defaults.set(true, forKey: praxisBackendFlagKey)
+        T.expect(Backend.praxisAvailable, "flag on -> available")
+        T.equal(Backend.kind, .praxis, "and the stored pick is honoured again")
+        T.equal(Backend.selectable, BackendKind.allCases, "both backends are offered")
     }
 }

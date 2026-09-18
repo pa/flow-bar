@@ -33,6 +33,21 @@ public enum BackendKind: String, CaseIterable, Sendable, Identifiable {
 /// existing install keeps behaving exactly as it did before the toggle existed.
 public let workBackendKey = "workBackend"
 
+/// UserDefaults key gating the praxis backend as a whole.
+///
+/// The backend is not GA: it needs a `prx` with the `work` command, it has no
+/// playbooks or stats, and its "open a task" path is newer than flow's. So it
+/// is OFF unless someone asks for it:
+///
+///     defaults write cloud.facets.flow-bar experimentalPraxisBackend -bool true
+///
+/// A hidden default rather than a visible switch, for the same reason
+/// `sessionWatchVerbose` is one — shipping the control to everyone is the part
+/// that makes a feature GA, and the picker itself stays hidden until this is
+/// set. When it is off, a stored `workBackend` of "praxis" is ignored rather
+/// than honoured, so turning the flag back off is a complete way out.
+public let praxisBackendFlagKey = "experimentalPraxisBackend"
+
 /// UserDefaults key for an explicit `prx` path. Empty means "find prx on PATH",
 /// which is what a normal install wants; an explicit path is how someone points
 /// the app at a build that is not the installed one.
@@ -263,9 +278,23 @@ extension WorkBackend {
 /// to take effect on the next refresh, and a cached client would keep answering
 /// from the old CLI until relaunch.
 public enum Backend {
+    /// Whether the praxis backend may be selected at all. See
+    /// `praxisBackendFlagKey`.
+    public static var praxisAvailable: Bool {
+        UserDefaults.standard.bool(forKey: praxisBackendFlagKey)
+    }
+
     public static var kind: BackendKind {
+        // The flag wins over the selection. Anything else would leave a user
+        // who tried praxis stuck on it after the flag went away.
+        guard praxisAvailable else { return .flow }
         let raw = UserDefaults.standard.string(forKey: workBackendKey) ?? ""
         return BackendKind(rawValue: raw) ?? .flow
+    }
+
+    /// The backends a picker may offer.
+    public static var selectable: [BackendKind] {
+        praxisAvailable ? BackendKind.allCases : [.flow]
     }
 
     /// The client for the selected backend.
