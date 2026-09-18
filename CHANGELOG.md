@@ -59,6 +59,19 @@ the GitHub release notes when a version is tagged.
   together; reading them in sequence stalls as soon as the child fills the
   other pipe's buffer, which a task list with long briefs comfortably exceeds.
 
+### Added
+
+- **Choose WHICH session a task opens.** Under praxis a task accumulates a
+  session per stretch of work — one real task here has 23 — so “open the task”
+  had more than one answer and you got the one flow-bar guessed. The detail
+  pane’s **Open** is now a split control: the button still opens the session the
+  task was last worked in, and the menu names the others, plus **New session…**
+  for a deliberately clean start. Each line is the session’s own title with its
+  age, and ● marks one that is already on screen — picking that one focuses its
+  tab instead of opening anything. Empty sessions are not offered at all, since
+  resuming one is the same as starting fresh. `flowbar-smoke --sessions-for
+  <slug>` prints the same list from the terminal.
+
 ### Changed
 
 - **The flow-root switcher is hidden under praxis.** A flow root is flow's

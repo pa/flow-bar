@@ -250,7 +250,23 @@ public struct PraxisClient: Sendable, WorkBackend {
                           status: payload.status ?? "",
                           archived: payload.archived ?? false,
                           brief: payload.brief ?? "",
-                          updates: updates)
+                          updates: updates,
+                          sessions: sessions(payload))
+    }
+
+    /// The task's sessions, for the detail pane's picker.
+    ///
+    /// Free of extra subprocesses on the CLI side: `show` has already returned
+    /// the segments, and each session's title comes from a bounded read of its
+    /// own transcript. The one process here is a single `ps`, shared across
+    /// every session rather than run per row.
+    private func sessions(_ payload: ShowPayload) -> [TaskSession] {
+        let ps = (try? CLI.run("/bin/ps", ["-axo", "pid,tty,command"], timeout: 10))
+            .flatMap { String(data: $0.stdout, encoding: .utf8) } ?? ""
+        return Self.taskSessions(
+            segments: (payload.segments ?? []).map { ($0.session ?? "", $0.start, $0.end) },
+            summary: Self.sessionSummary,
+            isLive: { Self.sessionIsLive($0, psOutput: ps) })
     }
 
     public func playbookDetail(_ slug: String) throws -> TaskDetail {
@@ -401,17 +417,29 @@ public struct PraxisClient: Sendable, WorkBackend {
     /// `/usr/bin/open`, which is LaunchServices rather than Apple events — no
     /// Automation grant, so no silent TCC failure.
     @discardableResult
-    public func doTask(_ slug: String, skipPermissions: Bool = false)
+    public func doTask(_ slug: String, skipPermissions: Bool = false,
+                       destination: TaskDestination = .auto)
         throws -> (stderr: String, code: Int32)
     {
         let payload = try? show(slug)
-        let resume = Self.resumableSession(payload)
+        // A chosen session wins over the heuristic and is NOT re-validated:
+        // the picker only offers sessions that have something in them, and
+        // second-guessing the person's pick lands them somewhere they did not
+        // ask for. `.fresh` deliberately resumes nothing.
+        let resume: String?
+        switch destination {
+        case .auto:              resume = Self.resumableSession(payload)
+        case .session(let id):   resume = id.isEmpty ? nil : id
+        case .fresh:             resume = nil
+        }
 
         // Already on screen? Go there. Opening a second tab on the same session
         // is what flow's `do` avoids by focusing the existing one, and without
         // it every click stacks another tab serving the session you are already
-        // looking at.
-        if Self.focusExistingTab(slug: slug, session: resume) {
+        // looking at. NOT for `.fresh`: asking for a new session and being sent
+        // to an existing tab is the opposite of what was asked.
+        if destination != .fresh,
+           Self.focusExistingTab(slug: slug, session: resume) {
             CLI.log("praxis do \(slug): focused the existing tab")
             return ("already open", 0)
         }
@@ -610,6 +638,151 @@ public struct PraxisClient: Sendable, WorkBackend {
                                            hasConversation: (String) -> Bool) -> String?
     {
         segments.reversed().first(where: hasConversation)
+    }
+
+    /// Whether a session is running in a terminal right now, from `ps` output.
+    ///
+    /// Per-SESSION, unlike `ttyServing`, which also matches the task's slug.
+    /// That fallback is right when focusing "the tab for this task" and wrong
+    /// here: it would mark every session of a live task as live, which is
+    /// exactly the distinction a picker exists to show.
+    public static func sessionIsLive(_ sessionID: String, psOutput: String) -> Bool {
+        guard !sessionID.isEmpty else { return false }
+        for line in psOutput.split(separator: "\n") where line.contains(sessionID) {
+            // `pid tty command`: a row with no controlling terminal is a
+            // `prx sdk` run, which has no tab to go to.
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard fields.count >= 3 else { continue }
+            let tty = String(fields[1])
+            if tty != "??", tty != "?", !tty.isEmpty { return true }
+        }
+        return false
+    }
+
+    /// A task's sessions, NEWEST FIRST, as something a person can choose from.
+    ///
+    /// **Empty sessions are left out.** Resuming one is indistinguishable from
+    /// starting fresh, and they are the residue of the bug that used to mint a
+    /// blank session per click — one real task carries three 531-byte empties
+    /// on top of its 508 KB session. Offering all four would make the list
+    /// mostly noise and the choice mostly wrong; "new session" is a separate
+    /// action, so nothing is lost by omitting them.
+    ///
+    /// **One entry per SESSION, not per segment.** A session that worked a
+    /// task, went away and came back records a segment each time — measured on
+    /// a real task, which offered the same session twice under the same title.
+    /// Two menu lines that do the identical thing are a choice the person
+    /// cannot make, so stretches are folded and the most recent one dates the
+    /// entry.
+    ///
+    /// Pure, over plain values, so the ordering, folding and filtering are
+    /// testable without a store or a process.
+    public static func taskSessions(
+        segments: [(id: String, start: String?, end: String?)],
+        summary: (String) -> (title: String?, hasConversation: Bool),
+        isLive: (String) -> Bool) -> [TaskSession]
+    {
+        var seen = Set<String>()
+        // Newest first, so the first stretch met for a session is its latest.
+        return segments.reversed().compactMap { seg in
+            guard !seg.id.isEmpty, !seen.contains(seg.id) else { return nil }
+            let found = summary(seg.id)
+            guard found.hasConversation else { return nil }
+            seen.insert(seg.id)
+            return TaskSession(id: seg.id,
+                               title: found.title,
+                               started: seg.start.flatMap(TranscriptTime.parse),
+                               ended: seg.end.flatMap(TranscriptTime.parse),
+                               live: isLive(seg.id))
+        }
+    }
+
+    /// A session's own title and whether it holds any conversation, from ONE
+    /// bounded read of the transcript's head.
+    ///
+    /// The first record is a `session` entry carrying the title praxis derived
+    /// from the opening prompt; later `title_change` records may re-title it.
+    /// **The header title WINS.** A re-title is sometimes cut from
+    /// mid-conversation text and is then useless as a label — measured on a
+    /// real store, one session's header read `CoinSwitch UAT down services
+    /// debug` and its re-title read `: I don't have access to Slack, so`. The
+    /// later value is not more informed, just later, so a change is used only
+    /// when there is no header title to prefer. `titleSource` cannot make this
+    /// call: it was `user` for the good and the junk alike.
+    ///
+    /// Only a bounded prefix is read: the header is the first line and any
+    /// early re-title lands within the first KB, while the transcript itself
+    /// can be 508 KB — so a whole-file scan would be waste. A session that was
+    /// opened and abandoned has no title and no message records; both facts
+    /// come from this same read, so the picker costs one bounded read per
+    /// session and no subprocess.
+    public static func sessionSummary(sessionID: String) -> (title: String?, hasConversation: Bool) {
+        guard let url = SessionLocator.praxisTranscriptURL(sessionID: sessionID),
+              let handle = try? FileHandle(forReadingFrom: url)
+        else { return (nil, false) }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: 64 * 1024),
+              let text = String(data: prefix, encoding: .utf8)
+        else { return (nil, false) }
+
+        var headerTitle: String?
+        var changedTitle: String?
+        var hasConversation = false
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.contains("\"type\":\"message\"") { hasConversation = true }
+            if line.contains("\"type\":\"session\""), headerTitle == nil {
+                headerTitle = Self.cleanTitle(Self.jsonString(field: "title", in: line))
+            } else if line.contains("\"type\":\"title_change\""), changedTitle == nil {
+                changedTitle = Self.cleanTitle(Self.jsonString(field: "title", in: line))
+            }
+        }
+        return (headerTitle ?? changedTitle, hasConversation)
+    }
+
+    /// Tidy a session title, or reject it as no title at all.
+    ///
+    /// A title cut from mid-conversation text arrives with the punctuation it
+    /// was severed at (`: I don't have access to Slack`), which reads as
+    /// breakage rather than as a label. Leading punctuation is dropped; what is
+    /// left empty is no title, and the caller falls back to a short id.
+    public static func cleanTitle(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .drop(while: { ":,;-—–".contains($0) || $0 == " " })
+        let out = String(trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
+        return out.isEmpty ? nil : out
+    }
+
+    /// Pull one string field out of a JSON line without decoding the record.
+    ///
+    /// The transcript is JSONL of many shapes and only this one field is
+    /// wanted, so a full `JSONDecoder` pass per line would decode work nobody
+    /// reads. Handles the escapes a title can actually contain.
+    static func jsonString(field: String, in line: Substring) -> String? {
+        guard let keyRange = line.range(of: "\"\(field)\":\"") else { return nil }
+        var out = ""
+        var i = keyRange.upperBound
+        while i < line.endIndex {
+            let c = line[i]
+            if c == "\\" {
+                let next = line.index(after: i)
+                guard next < line.endIndex else { return out }
+                switch line[next] {
+                case "n": out.append("\n")
+                case "t": out.append("\t")
+                case "\"": out.append("\"")
+                case "\\": out.append("\\")
+                case "u": return out   // a \uXXXX escape ends the cheap path
+                default: out.append(line[next])
+                }
+                i = line.index(after: next)
+                continue
+            }
+            if c == "\"" { return out }
+            out.append(c)
+            i = line.index(after: i)
+        }
+        return out
     }
 
     /// Whether a praxis session transcript holds any conversation at all.

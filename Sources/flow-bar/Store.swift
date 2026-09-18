@@ -803,7 +803,11 @@ final class Store: ObservableObject {
     /// - Parameter skipPermissions: nil asks the keyboard — a held ⌥ at click
     ///   time. A menu item passes the answer explicitly instead, because by the
     ///   time its action runs the modifier that opened the menu is long gone.
-    func switchTo(_ slug: String, skipPermissions: Bool? = nil) {
+    /// - Parameter destination: which of the task's sessions to land in. The
+    ///   default lets the backend choose, which is what a plain click means.
+    func switchTo(_ slug: String, skipPermissions: Bool? = nil,
+                  destination: TaskDestination = .auto)
+    {
         // Read the modifier before dismissing, while the click that got us here
         // is still the current event.
         let skip = skipPermissions ?? Self.skipPermissionsRequested()
@@ -812,7 +816,8 @@ final class Store: ObservableObject {
         Task {
             do {
                 let res = try await Task.detached(priority: .userInitiated) {
-                    try Backend.active().doTask(slug, skipPermissions: skip)
+                    try Backend.active().doTask(slug, skipPermissions: skip,
+                                                destination: destination)
                 }.value
                 self.spawningOps -= 1
                 if res.code == 0 {

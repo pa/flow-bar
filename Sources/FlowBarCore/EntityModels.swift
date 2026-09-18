@@ -90,6 +90,37 @@ public struct TaskUpdate: Identifiable, Hashable, Sendable {
     }
 }
 
+/// One stretch a harness session spent on a task, as something a person can
+/// pick from a list.
+///
+/// A task accumulates these: praxis records a segment per session that worked
+/// it, so "open this task" has more than one possible destination and only the
+/// person knows which. `title` is the session's OWN title — what it decided it
+/// was about — because that is the only label that distinguishes two sessions
+/// on one task. A UUID does not.
+public struct TaskSession: Identifiable, Hashable, Sendable {
+    public var id: String
+    /// The session's own title, latest wins. Nil for one that never earned one.
+    public var title: String?
+    public var started: Date?
+    public var ended: Date?
+    /// Whether a terminal is running this session right now.
+    public var live: Bool
+
+    public init(id: String, title: String? = nil, started: Date? = nil,
+                ended: Date? = nil, live: Bool = false)
+    {
+        self.id = id; self.title = title
+        self.started = started; self.ended = ended; self.live = live
+    }
+
+    /// What to show in a list. Falls back to a short id, never the bare UUID.
+    public var label: String {
+        if let title, !title.trimmingCharacters(in: .whitespaces).isEmpty { return title }
+        return "Session \(id.prefix(8))"
+    }
+}
+
 /// A task's readable detail: its brief and recent progress notes, assembled by
 /// `FlowClient.taskDetail` from `flow show task` (for the file paths) + reading
 /// those markdown files. Never touches flow.db.
@@ -100,10 +131,15 @@ public struct TaskDetail: Hashable, Sendable {
     public var archived: Bool
     public var brief: String            // brief.md content (may be empty)
     public var updates: [TaskUpdate]     // newest first
+    /// The sessions that have worked this task, NEWEST FIRST. Empty on a
+    /// backend that binds one session per task, which is why the picker is
+    /// capability-gated rather than conditional on this being non-empty.
+    public var sessions: [TaskSession]
     public init(slug: String, name: String, status: String, archived: Bool = false,
-                brief: String, updates: [TaskUpdate]) {
+                brief: String, updates: [TaskUpdate], sessions: [TaskSession] = []) {
         self.slug = slug; self.name = name; self.status = status
         self.archived = archived; self.brief = brief; self.updates = updates
+        self.sessions = sessions
     }
     public var isDone: Bool { status == "done" }
     /// A done or archived task has nothing meaningful to switch to.
