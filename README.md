@@ -39,6 +39,7 @@ see what's in flight and switch between tasks without leaving the menubar.
 | Playbooks & runs | yes | — *(pane hidden)* |
 | AI-memory stats | `flow stats` | — *(card hidden)* |
 | Work roots | named `FLOW_ROOT`s, switchable | — *(picker hidden; one agent dir)* |
+| Sessions per task | one | many — *Open* lets you pick, or start a new one |
 | Switch to a task | `flow do <slug>` | a `.command` that execs `prx -resume`/`-work` |
 
 What praxis has no equivalent of is **hidden, not faked** — an empty pane that

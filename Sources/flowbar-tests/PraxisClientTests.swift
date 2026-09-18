@@ -353,6 +353,79 @@ func runPraxisClientTests() {
         T.equal(Backend.active().kind, .praxis, "factory follows the setting")
     }
 
+    T.test("a task's sessions: newest first, folded, empties left out") {
+        // Shaped like the real store: oldest-first segments, one session that
+        // came back for a second stretch, and the blank-session residue.
+        let segments: [(id: String, start: String?, end: String?)] = [
+            ("old",    "2026-09-16T09:11:02.440227Z", nil),
+            ("empty1", "2026-09-17T15:46:47.481912Z", nil),
+            ("old",    "2026-09-17T18:00:00.000000Z", nil),   // same session, later stretch
+            ("recent", "2026-09-18T08:00:00.000000Z", nil),
+            ("",       "2026-09-18T09:00:00.000000Z", nil),   // no id at all
+        ]
+        let titles = ["old": "Discovery capture", "recent": "Cutover dependencies"]
+        let sessions = PraxisClient.taskSessions(
+            segments: segments,
+            summary: { id in (titles[id], titles[id] != nil) },
+            isLive: { $0 == "recent" })
+
+        T.equal(sessions.map(\.id), ["recent", "old"],
+                "newest first; the empty one and the id-less one are not offered")
+        T.equal(sessions.filter { $0.id == "old" }.count, 1,
+                "two stretches of one session are ONE choice, not two identical lines")
+        // Folding keeps the LATEST stretch, so the age shown is the last time
+        // that session worked the task rather than the first.
+        T.equal(sessions.last?.started, TranscriptTime.parse("2026-09-17T18:00:00.000000Z"),
+                "the folded entry is dated by its most recent stretch")
+        T.expect(sessions.first?.live == true, "the running one is marked")
+        T.expect(sessions.last?.live == false, "the others are not")
+        T.equal(sessions.first?.label, "Cutover dependencies", "its own title labels it")
+
+        // Nothing resumable is a valid answer: a click then starts a session
+        // bound to the task instead of resuming a blank one.
+        T.expect(PraxisClient.taskSessions(segments: segments,
+                                           summary: { _ in (nil, false) },
+                                           isLive: { _ in false }).isEmpty,
+                 "all-empty offers nothing")
+    }
+
+    T.test("a session with no usable title still reads as something") {
+        T.equal(TaskSession(id: "01a0affa-1234", title: nil).label, "Session 01a0affa",
+                "falls back to a short id, never a bare UUID")
+        T.equal(TaskSession(id: "x", title: "   ").label, "Session x", "blank is no title")
+        // Measured on a real store: a re-title cut from mid-conversation keeps
+        // the punctuation it was severed at, which reads as breakage.
+        T.equal(PraxisClient.cleanTitle(": I don't have access to Slack"),
+                "I don't have access to Slack", "leading punctuation is dropped")
+        T.equal(PraxisClient.cleanTitle("  Aggregation cutover  "), "Aggregation cutover", "trimmed")
+        T.expect(PraxisClient.cleanTitle(" :  ") == nil, "punctuation alone is no title")
+        T.expect(PraxisClient.cleanTitle(nil) == nil, "absent stays absent")
+    }
+
+    T.test("a destination says which session, or deliberately none") {
+        T.equal(TaskDestination.session("abc").sessionID, "abc", "names the session")
+        T.expect(TaskDestination.auto.sessionID == nil, "auto names none")
+        T.expect(TaskDestination.fresh.sessionID == nil, "fresh names none")
+        // `.fresh` and `.auto` both resume nothing, yet they are NOT the same
+        // request: fresh must not be sent to an existing tab.
+        T.expect(TaskDestination.fresh != .auto, "a new session is not 'whatever you pick'")
+        T.expect(TaskDestination.session("").sessionID == nil, "an empty id names nothing")
+    }
+
+    T.test("liveness is per session, not per task") {
+        // Two sessions of one task, only the second on a terminal. `ps` rows are
+        // `pid tty command`; a `??` tty is a prx sdk run with no tab.
+        let ps = """
+        501 ??       /usr/bin/prx sdk --session aaa
+        502 ttys004  /Users/x/.local/bin/prx -resume bbb
+        """
+        T.expect(!PraxisClient.sessionIsLive("aaa", psOutput: ps),
+                 "an sdk run has no tab, so it is not somewhere you can be sent")
+        T.expect(PraxisClient.sessionIsLive("bbb", psOutput: ps), "the one on a tty is live")
+        T.expect(!PraxisClient.sessionIsLive("ccc", psOutput: ps), "an absent session is not")
+        T.expect(!PraxisClient.sessionIsLive("", psOutput: ps), "and no id matches nothing")
+    }
+
     T.test("capabilities declare what each backend actually has") {
         // The rule the whole UI leans on: a concept the backend does not have
         // is HIDDEN, not shown empty or faked.
@@ -369,6 +442,10 @@ func runPraxisClientTests() {
         T.equal(BackendCapabilities.praxis.recurringTitle, "Schedules", "named as praxis names it")
         T.expect(!BackendCapabilities.praxis.recurringHasForegroundRun,
                  "a praxis schedule run is always detached")
+        T.expect(BackendCapabilities.praxis.multipleSessionsPerTask,
+                 "praxis records a segment per session, so a task has several")
+        T.expect(!BackendCapabilities.flow.multipleSessionsPerTask,
+                 "flow binds one session per task — a picker would list one thing")
     }
 
     T.test("prx resolves to the standard install path by default") {

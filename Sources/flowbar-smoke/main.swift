@@ -160,6 +160,39 @@ if let i = CommandLine.arguments.firstIndex(of: "--tty-for"),
     exit(0)
 }
 
+// `--sessions-for <slug>` prints the picker's own list: which sessions the task
+// offers, what each is about, and which one a plain click would take. Answers
+// "why is my session not in the menu?" without opening a terminal.
+if let i = CommandLine.arguments.firstIndex(of: "--sessions-for"),
+   i + 1 < CommandLine.arguments.count
+{
+    let slug = CommandLine.arguments[i + 1]
+    if let j = CommandLine.arguments.firstIndex(of: "--prx"), j + 1 < CommandLine.arguments.count {
+        UserDefaults.standard.set(CommandLine.arguments[j + 1], forKey: praxisBinaryKey)
+    }
+    do {
+        let client = PraxisClient()
+        let detail = try client.taskDetail(slug)
+        let auto = try client.resumePlan(slug).resume
+        print("task:     \(slug)")
+        print("offered:  \(detail.sessions.count) session(s) "
+              + "(empty ones are deliberately not offered)")
+        for s in detail.sessions {
+            let mark = s.id == auto ? "← a plain click" : ""
+            let age = s.started.map { RelativeAge.short($0, now: Date()) } ?? "?"
+            print("  \(s.live ? "●" : " ") \(s.id.prefix(8))  \(age.padding(toLength: 5, withPad: " ", startingAt: 0))"
+                  + "  \(s.label)  \(mark)")
+        }
+        if detail.sessions.isEmpty {
+            print("  (nothing resumable — a click starts a session bound to the task)")
+        }
+    } catch {
+        FileHandle.standardError.write(Data("sessions-for failed: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+}
+
 // `--resume-for <slug>` answers "what will clicking this task actually open?"
 // against the real store, without opening a terminal to find out.
 if let i = CommandLine.arguments.firstIndex(of: "--resume-for"),

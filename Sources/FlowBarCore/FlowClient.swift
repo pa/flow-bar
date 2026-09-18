@@ -515,7 +515,13 @@ public struct FlowClient: Sendable, WorkBackend {
     /// Switch to a task: focuses its live tab or spawns a new one.
     /// (Phase 3 wires this to the UI; defined here so the bridge is complete.)
     @discardableResult
-    public func doTask(_ slug: String, skipPermissions: Bool = false)
+    /// `destination` is accepted and ignored: flow binds a task to ONE session
+    /// (`capabilities.multipleSessionsPerTask` is false, so no picker is
+    /// offered), and `flow do` already focuses that session's tab or spawns it.
+    /// There is nothing to choose between, which is why this is not a silent
+    /// drop of a meaningful argument.
+    public func doTask(_ slug: String, skipPermissions: Bool = false,
+                       destination: TaskDestination = .auto)
         throws -> (stderr: String, code: Int32)
     {
         // flow owns the terminal it opens

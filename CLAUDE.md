@@ -173,6 +173,42 @@ suppresses is the prompt that stops a command you did not mean to run. The menu
 exists because a modifier alone is invisible, and because the flag being inert
 on live tasks means a first attempt very often lands on one and looks broken.
 
+**A praxis task has MANY sessions, and the person picks.** praxis records a
+segment per stretch a session spent on a task, so "open this task" has several
+answers (one real task here offers 23). `TaskDetail.sessions` carries them and
+the detail pane's Open button becomes a split control — `primaryAction` keeps
+the old behaviour, the menu names the rest, plus `New session…` (`.fresh`).
+Gated on `capabilities.multipleSessionsPerTask`, because flow binds ONE session
+per task and a picker there would list one thing.
+
+- **`TaskDestination` is an enum, not a `String?`.** Three cases are genuinely
+  different: `.auto` (what a plain click means), `.session(id)`, and `.fresh`.
+  The last cannot be spelled as "no id", because that is `.auto` — and a
+  session you deliberately walked away from is exactly the one the heuristic
+  would hand back. `.fresh` also skips the focus-an-existing-tab step, since
+  being sent to an old tab is the opposite of asking for a new session.
+- **The label is the session's OWN title, and the HEADER title wins.** A later
+  `title_change` is sometimes cut from mid-conversation text: measured on this
+  store, a session whose header read `CoinSwitch UAT down services debug` was
+  re-titled `: I don't have access to Slack, so`. Later is not better informed,
+  just later, so a change is used only when there is no header title.
+  `titleSource` cannot arbitrate — it was `user` for good and junk alike — and
+  `cleanTitle` strips the punctuation a severed title starts with.
+- **One entry per session, not per segment.** A session that leaves a task and
+  comes back records another segment; a real task listed the same session twice
+  under the same title, which is a choice nobody can make. Stretches are folded
+  and the entry is dated by the most recent one.
+- **Empty sessions are never offered.** Resuming one is indistinguishable from
+  starting fresh, and they are the residue of the blank-session bug (one task
+  carries three 531-byte empties atop a 508 KB session).
+- **Liveness is per SESSION here** (`sessionIsLive`), not `ttyServing`'s
+  task-level match — that also matches `-work <slug>` and would mark every
+  session of a live task as live, erasing the distinction the picker exists for.
+- Costs no extra subprocess: `prx work show` has already returned the segments,
+  each title comes from one bounded 64 KB read of that session's transcript, and
+  a single `ps` covers liveness for the whole list. Inspect it with
+  `flowbar-smoke --sessions-for <slug>`.
+
 Under praxis there is no `do` to delegate to — `prx` **is** the session, not a
 launcher — so flow-bar opens the terminal itself: it writes a `.command` script
 that cds to the task's work dir and `exec`s `prx -work <slug>`, then hands it to

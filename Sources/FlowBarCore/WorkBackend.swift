@@ -78,6 +78,15 @@ public struct BackendCapabilities: Sendable {
     /// `--auto` runs headless; a praxis schedule run is always detached, so the
     /// distinction would be a lie.
     public var recurringHasForegroundRun: Bool
+    /// Whether ONE task can have several sessions to choose between.
+    ///
+    /// flow binds a task to a single session, so "open the task" has exactly
+    /// one destination and a picker would be a list of one. praxis records a
+    /// segment per session that worked the task, so the task genuinely has
+    /// several places to land and only the person knows which — hence the
+    /// picker, gated here rather than inferred from a list that happens to
+    /// hold one entry today.
+    public var multipleSessionsPerTask: Bool
     /// Whether several interchangeable work roots exist to switch between.
     ///
     /// flow keeps its whole store under one `FLOW_ROOT`, so pointing at another
@@ -89,8 +98,10 @@ public struct BackendCapabilities: Sendable {
 
     public init(playbooks: Bool, stats: Bool, recurring: Bool,
                 recurringTitle: String, recurringNoun: String,
-                recurringHasForegroundRun: Bool, workRoots: Bool)
+                recurringHasForegroundRun: Bool, workRoots: Bool,
+                multipleSessionsPerTask: Bool)
     {
+        self.multipleSessionsPerTask = multipleSessionsPerTask
         self.playbooks = playbooks
         self.stats = stats
         self.recurring = recurring
@@ -103,12 +114,37 @@ public struct BackendCapabilities: Sendable {
     public static let flow = BackendCapabilities(
         playbooks: true, stats: true, recurring: true,
         recurringTitle: "Owners", recurringNoun: "owner",
-        recurringHasForegroundRun: true, workRoots: true)
+        recurringHasForegroundRun: true, workRoots: true,
+        multipleSessionsPerTask: false)
 
     public static let praxis = BackendCapabilities(
         playbooks: false, stats: false, recurring: true,
         recurringTitle: "Schedules", recurringNoun: "schedule",
-        recurringHasForegroundRun: false, workRoots: false)
+        recurringHasForegroundRun: false, workRoots: false,
+        multipleSessionsPerTask: true)
+}
+
+/// Where opening a task should land.
+///
+/// A task with several sessions has three genuinely different answers, and
+/// `String?` could only express two — "this session" and "whatever you would
+/// pick" — leaving "start a fresh one even though others exist" to be smuggled
+/// in as an empty string. A session you deliberately left behind is exactly the
+/// one a heuristic would choose for you, so that case has to be sayable.
+public enum TaskDestination: Equatable, Sendable {
+    /// Whatever the backend would pick: the most recent session with something
+    /// in it, or a new one when there is none. What a plain click sends.
+    case auto
+    /// This session, chosen by the person from the task's list.
+    case session(String)
+    /// A NEW session on the task, leaving the existing ones alone.
+    case fresh
+
+    /// The session id to reopen, if this destination names one.
+    public var sessionID: String? {
+        if case .session(let id) = self, !id.isEmpty { return id }
+        return nil
+    }
 }
 
 /// Raised when the UI asks a backend for something that backend does not have.
@@ -226,8 +262,13 @@ public protocol WorkBackend: Sendable {
     /// a permission mode is fixed when its process starts, so on a live tab the
     /// flag is inert rather than a silent mode change. That is what makes
     /// offering it per-click safe, and why the menu disables it there.
+    ///
+    /// `destination` says WHERE to land when the task has more than one
+    /// session: a specific one, a deliberately fresh one, or whichever the
+    /// backend would choose.
     @discardableResult
-    func doTask(_ slug: String, skipPermissions: Bool) throws -> (stderr: String, code: Int32)
+    func doTask(_ slug: String, skipPermissions: Bool, destination: TaskDestination)
+        throws -> (stderr: String, code: Int32)
     @discardableResult
     func runPlaybook(_ slug: String, auto: Bool) throws -> (stderr: String, code: Int32)
     /// Wake a recurring agent now (flow owner tick / praxis schedule run).
@@ -239,10 +280,19 @@ public protocol WorkBackend: Sendable {
 }
 
 extension WorkBackend {
-    /// `doTask` with permission prompts left on — the plain click.
+    /// `doTask` with permission prompts left on, landing wherever the backend
+    /// would choose — the plain click.
     @discardableResult
     public func doTask(_ slug: String) throws -> (stderr: String, code: Int32) {
-        try doTask(slug, skipPermissions: false)
+        try doTask(slug, skipPermissions: false, destination: .auto)
+    }
+
+    /// `doTask` with a permission mode, landing wherever the backend would.
+    @discardableResult
+    public func doTask(_ slug: String, skipPermissions: Bool)
+        throws -> (stderr: String, code: Int32)
+    {
+        try doTask(slug, skipPermissions: skipPermissions, destination: .auto)
     }
 
     /// `listTasks` with the defaults the UI actually uses.
