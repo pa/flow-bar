@@ -29,6 +29,49 @@ struct SettingsView: View {
                     hint("Click the shortcut, then press a new key combo (needs a modifier). Press it from anywhere to open or close the popover.")
                 }
 
+                section("Work source") {
+                    Picker("", selection: $store.backendKind) {
+                        ForEach(BackendKind.allCases) { kind in
+                            Text(kind.label).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+
+                    hint(store.backendKind == .flow
+                         ? "Tasks, projects, playbooks and owners come from the “flow” CLI."
+                         : "Tasks, projects, briefs, notes, tags and schedules come from "
+                           + "the praxis harness (“prx work”). Playbooks and flow’s stats "
+                           + "have no praxis equivalent, so those panes are hidden — "
+                           + "opening a task starts a prx session bound to it.")
+
+                    if store.backendKind == .praxis {
+                        pathRow("prx binary", placeholder: "find prx on PATH",
+                                text: $store.praxisBinary)
+                        pathRow("Agent directory", placeholder: "~/.praxis/agent",
+                                text: $store.praxisAgentDir)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button(store.backendProbing ? "Checking…" : "Check") {
+                            store.probeBackend()
+                        }
+                        .font(.system(size: 12)).buttonStyle(.link)
+                        .disabled(store.backendProbing)
+                        if let status = store.backendStatus {
+                            HStack(alignment: .top, spacing: 4) {
+                                Image(systemName: store.backendStatusOK
+                                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .font(.system(size: 10))
+                                Text(status).font(.system(size: 11)).lineLimit(3)
+                            }
+                            .foregroundStyle(store.backendStatusOK ? .green : .orange)
+                            .textSelection(.enabled)
+                        }
+                    }
+                }
+
                 section("General") {
                     Toggle("Launch at login", isOn: $store.launchAtLogin)
                         .font(.system(size: 13))
@@ -242,6 +285,20 @@ struct SettingsView: View {
                  + "re-allow terminal control after each update — and until you do, "
                  + "opening a task fails silently. “Fix” gives it a stable signature "
                  + "and relaunches.")
+        }
+    }
+
+    /// A labelled path field. Empty is always meaningful here (“use the
+    /// default”), so the placeholder states what empty does rather than being
+    /// an example value.
+    private func pathRow(_ label: String, placeholder: String,
+                         text: Binding<String>) -> some View
+    {
+        HStack(spacing: 8) {
+            Text(label).font(.system(size: 13)).frame(width: 110, alignment: .leading)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
         }
     }
 

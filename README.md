@@ -15,9 +15,28 @@ see what's in flight and switch between tasks without leaving the menubar.
 ![Platform: macOS 15+](https://img.shields.io/badge/macOS-15%2B-black?logo=apple)
 ![Built with Swift](https://img.shields.io/badge/Swift-6-orange?logo=swift)
 
-> flow-bar is a **companion** to the `flow` CLI — it reads your tasks through
-> `flow … --format json` and switches to them with `flow do`. You need `flow`
-> installed and on your `PATH`.
+> flow-bar is a **companion** to a local work CLI. Out of the box that is
+> `flow` — it reads your tasks through `flow … --format json` and switches to
+> them with `flow do`. It can also be pointed at the **praxis harness**
+> (`prx`), which keeps the same concepts natively; pick one under
+> **Settings → Work source**. Either way, the CLI needs to be on your `PATH`.
+
+## Two backends
+
+| | `flow` | praxis (`prx`) |
+|---|---|---|
+| Tasks, projects, tags | `flow list … --format json` | `prx work list … -json` |
+| Brief + updates | `flow show task` | `prx work show -json` |
+| Recurring agents | Owners (`flow owner`) | Schedules (`prx schedule`) |
+| Playbooks & runs | yes | — *(pane hidden)* |
+| AI-memory stats | `flow stats` | — *(card hidden)* |
+| Switch to a task | `flow do <slug>` | a `.command` that execs `prx -work <slug>` |
+
+What praxis has no equivalent of is **hidden, not faked** — an empty pane that
+can never fill is worse than no pane. The praxis path needs a `prx` that has
+the `work` command; **Settings → Work source → Check** tells you which binary
+answered and whether it does, instead of leaving you with a task list that is
+silently empty.
 
 ## Features
 

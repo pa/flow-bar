@@ -1,0 +1,278 @@
+import Foundation
+
+/// Which CLI the app is driven by.
+///
+/// flow-bar was built against `flow`; the praxis harness (`prx`) keeps the same
+/// concepts in its own native store — tasks, projects, briefs, dated notes,
+/// tags, and standing scheduled jobs. Both are local CLIs that answer in JSON,
+/// so the app talks to whichever one the user picks and renders the same views.
+public enum BackendKind: String, CaseIterable, Sendable, Identifiable {
+    case flow
+    case praxis
+
+    public var id: String { rawValue }
+
+    /// What the user sees in the picker.
+    public var label: String {
+        switch self {
+        case .flow: return "flow"
+        case .praxis: return "praxis"
+        }
+    }
+
+    /// The executable this backend drives.
+    public var binaryName: String {
+        switch self {
+        case .flow: return "flow"
+        case .praxis: return "prx"
+        }
+    }
+}
+
+/// UserDefaults key for the selected backend. Absent means `flow`, so an
+/// existing install keeps behaving exactly as it did before the toggle existed.
+public let workBackendKey = "workBackend"
+
+/// UserDefaults key for an explicit `prx` path. Empty means "find prx on PATH",
+/// which is what a normal install wants; an explicit path is how someone points
+/// the app at a build that is not the installed one.
+public let praxisBinaryKey = "praxisBinary"
+
+/// UserDefaults key for the praxis agent directory (`PRAXIS_CODING_AGENT_DIR`).
+/// This is praxis's equivalent of a flow root: the work store, sessions and
+/// schedules all hang off it, so switching it switches profiles wholesale.
+public let praxisAgentDirKey = "praxisAgentDir"
+
+/// What a backend can actually do, and what its concepts are called.
+///
+/// The two CLIs are not feature-identical and pretending otherwise would mean
+/// empty panes with no explanation. A pane whose capability is false is hidden,
+/// not shown broken.
+public struct BackendCapabilities: Sendable {
+    /// Playbook definitions and their runs (flow only).
+    public var playbooks: Bool
+    /// The CLI's own usage statistics (flow only — `flow stats`).
+    public var stats: Bool
+    /// Recurring unattended agents: flow's `owner`, praxis's `schedule`.
+    public var recurring: Bool
+    /// Section title for the recurring agents pane.
+    public var recurringTitle: String
+    /// Singular noun for one of them, for buttons and empty states.
+    public var recurringNoun: String
+    /// Whether "run it now, in the background" is a distinct action. flow's
+    /// `--auto` runs headless; a praxis schedule run is always detached, so the
+    /// distinction would be a lie.
+    public var recurringHasForegroundRun: Bool
+
+    public init(playbooks: Bool, stats: Bool, recurring: Bool,
+                recurringTitle: String, recurringNoun: String,
+                recurringHasForegroundRun: Bool)
+    {
+        self.playbooks = playbooks
+        self.stats = stats
+        self.recurring = recurring
+        self.recurringTitle = recurringTitle
+        self.recurringNoun = recurringNoun
+        self.recurringHasForegroundRun = recurringHasForegroundRun
+    }
+
+    public static let flow = BackendCapabilities(
+        playbooks: true, stats: true, recurring: true,
+        recurringTitle: "Owners", recurringNoun: "owner",
+        recurringHasForegroundRun: true)
+
+    public static let praxis = BackendCapabilities(
+        playbooks: false, stats: false, recurring: true,
+        recurringTitle: "Schedules", recurringNoun: "schedule",
+        recurringHasForegroundRun: false)
+}
+
+/// Raised when the UI asks a backend for something that backend does not have.
+///
+/// The panes are gated on `BackendCapabilities`, so this should be unreachable
+/// from the UI; it exists so a wrong call fails with a sentence a user can read
+/// instead of an empty list that looks like missing data.
+public struct UnsupportedByBackend: Error, CustomStringConvertible {
+    public let feature: String
+    public let backend: BackendKind
+
+    public init(feature: String, backend: BackendKind) {
+        self.feature = feature
+        self.backend = backend
+    }
+
+    public var description: String { "\(backend.label) has no \(feature)" }
+}
+
+/// A task's harness session binding.
+public struct SessionInfo: Equatable, Sendable {
+    public var slug: String
+    /// The harness session id, or nil for a task no session has ever held.
+    public var sessionID: String?
+    public var workDir: String?
+    /// Whether that session is still alive — the CLI's call, not ours.
+    public var live: Bool
+    /// State of a headless run on this task, if there has been one: `running`,
+    /// `completed` or `dead`. Nil when the task has never been run headlessly.
+    /// flow reports this for `flow do --auto`; praxis leaves it nil.
+    public var autoRun: String?
+
+    /// Whether a headless run owns this task right now.
+    ///
+    /// Load-bearing for anything that watches sessions: a headless run is live,
+    /// has a transcript, and ends turns like any other session — but there is
+    /// no tab behind it and no human it could be waiting for (`--auto` implies
+    /// `--dangerously-skip-permissions`). Treating it as attention-worthy
+    /// produces an alert nobody can act on, pointing at a terminal that does
+    /// not exist.
+    public var autoRunning: Bool { autoRun == "running" }
+
+    public init(slug: String, sessionID: String? = nil,
+                workDir: String? = nil, live: Bool = false,
+                autoRun: String? = nil)
+    {
+        self.slug = slug
+        self.sessionID = sessionID
+        self.workDir = workDir
+        self.live = live
+        self.autoRun = autoRun
+    }
+}
+
+/// The work-tracking surface the UI is written against, independent of which
+/// CLI answers it.
+///
+/// Every method BLOCKS (they are subprocess calls) and is called from a
+/// detached task, which is why the protocol — and every conformer — is
+/// `Sendable`. Defaulted arguments are not expressible in a protocol
+/// requirement, so the requirements take every argument and the convenience
+/// spellings live in the extension below.
+public protocol WorkBackend: Sendable {
+    var kind: BackendKind { get }
+    var capabilities: BackendCapabilities { get }
+
+    // MARK: Reads
+
+    func listTasks(status: String?, tag: String?, project: String?,
+                   includeDone: Bool, includeArchived: Bool) throws -> [FlowTask]
+    /// In-progress tasks *including* playbook runs.
+    ///
+    /// A REQUIREMENT rather than an extension default on purpose: the UI holds
+    /// `any WorkBackend`, and an extension member would dispatch statically —
+    /// silently dropping flow's `--kind all`, which is the only way a running
+    /// playbook appears at all. praxis has no playbook runs, so its answer is
+    /// the plain in-progress list.
+    func inProgressTasksIncludingRuns() throws -> [FlowTask]
+    func listProjects() throws -> [Project]
+    func listPlaybooks() throws -> [Playbook]
+    func listRuns() throws -> [PlaybookRun]
+    func listOwners() throws -> [Owner]
+    /// The tasks belonging to one recurring agent. The two backends answer this
+    /// differently — flow tags a task `owner:<slug>`, a praxis schedule names a
+    /// single work task — so the backend answers it rather than the UI guessing
+    /// a convention that only one of them has.
+    func tasksFor(owner slug: String) throws -> [FlowTask]
+    func listTags() throws -> [TagCount]
+    func taskDetail(_ slug: String) throws -> TaskDetail
+    func playbookDetail(_ slug: String) throws -> TaskDetail
+    func flowStats() throws -> FlowStats
+    func dashboardMetrics() throws -> DashboardMetrics
+    func sessionInfo(_ slug: String) throws -> SessionInfo
+
+    /// One line saying whether this backend is usable right now: which binary
+    /// answered, its version, and that the commands the app needs are there.
+    /// Throws with the reason when it is not — an empty task list is not an
+    /// acceptable way to report "your CLI is too old".
+    func probe() throws -> String
+
+    // MARK: Writes and actions
+
+    @discardableResult
+    func createTask(name: String, slug: String, project: String?, workDir: String?,
+                    priority: String, due: String?, tags: [String],
+                    mkdir: Bool, brief: String) throws -> String
+    @discardableResult
+    func createProject(name: String, slug: String, workDir: String,
+                       priority: String, mkdir: Bool, brief: String) throws -> String
+    /// Switch to a task: focus its live session's tab, or open a new one.
+    ///
+    /// `skipPermissions` opens a NEW session that does not stop to ask —
+    /// `--dangerously-skip-permissions` on flow, `-permission-mode yolo` on
+    /// praxis. It cannot change the mode of a session that is ALREADY running:
+    /// a permission mode is fixed when its process starts, so on a live tab the
+    /// flag is inert rather than a silent mode change. That is what makes
+    /// offering it per-click safe, and why the menu disables it there.
+    @discardableResult
+    func doTask(_ slug: String, skipPermissions: Bool) throws -> (stderr: String, code: Int32)
+    @discardableResult
+    func runPlaybook(_ slug: String, auto: Bool) throws -> (stderr: String, code: Int32)
+    /// Wake a recurring agent now (flow owner tick / praxis schedule run).
+    @discardableResult
+    func ownerTick(_ slug: String, auto: Bool) throws -> (stderr: String, code: Int32)
+    /// Pause or resume a recurring agent.
+    @discardableResult
+    func setOwner(_ slug: String, paused: Bool) throws -> (stderr: String, code: Int32)
+}
+
+extension WorkBackend {
+    /// `doTask` with permission prompts left on — the plain click.
+    @discardableResult
+    public func doTask(_ slug: String) throws -> (stderr: String, code: Int32) {
+        try doTask(slug, skipPermissions: false)
+    }
+
+    /// `listTasks` with the defaults the UI actually uses.
+    ///
+    /// **Done tasks are hidden unless asked for.** A drill-in that reports "1
+    /// done" in its header and then shows nothing is worse than not counting at
+    /// all, so any view that displays a total must pass `includeDone`.
+    /// `includeArchived` is separate and equally opt-in.
+    public func tasks(status: String? = nil, tag: String? = nil, project: String? = nil,
+                      includeDone: Bool = false, includeArchived: Bool = false) throws -> [FlowTask]
+    {
+        try listTasks(status: status, tag: tag, project: project,
+                      includeDone: includeDone, includeArchived: includeArchived)
+    }
+
+    public func inProgressTasks() throws -> [FlowTask] {
+        try tasks(status: "in-progress")
+    }
+
+    /// Build the dashboard metrics in one shot. Each piece is optional: a
+    /// backend that has no playbooks or no owners contributes nothing rather
+    /// than failing the whole dashboard.
+    public func dashboardMetrics() throws -> DashboardMetrics {
+        let ip = try inProgressTasks()
+        let backlog = (try? tasks(status: "backlog").count) ?? 0
+        let done = (try? tasks(status: "done").count) ?? 0
+        let projects = (try? listProjects()) ?? []
+        let runs = (try? listRuns()) ?? []
+        let owners = (try? listOwners()) ?? []
+        let tagCounts = (try? listTags()) ?? []
+        let questions = (try? tasks(tag: "question")) ?? []
+        return DashboardMetrics(
+            inProgress: ip, backlogCount: backlog, doneCount: done,
+            projects: projects, runs: runs, owners: owners, tags: tagCounts,
+            questions: questions)
+    }
+}
+
+/// Which backend the app is pointed at right now.
+///
+/// Resolved from UserDefaults on every call rather than cached: the toggle has
+/// to take effect on the next refresh, and a cached client would keep answering
+/// from the old CLI until relaunch.
+public enum Backend {
+    public static var kind: BackendKind {
+        let raw = UserDefaults.standard.string(forKey: workBackendKey) ?? ""
+        return BackendKind(rawValue: raw) ?? .flow
+    }
+
+    /// The client for the selected backend.
+    public static func active() -> any WorkBackend {
+        switch kind {
+        case .flow: return FlowClient()
+        case .praxis: return PraxisClient()
+        }
+    }
+}

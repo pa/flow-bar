@@ -41,20 +41,41 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
 
 ## Architecture
 
-- **The flow CLI is the API.** We never read `~/.flow/flow.db` directly —
-  reads go through `flow list tasks --format json`, actions through real
-  subcommands. This keeps us schema-proof and respects flow's invariants.
+- **The CLI is the API.** We never read `~/.flow/flow.db` or the praxis work
+  store's `task.md` files directly — reads go through the CLI's JSON output,
+  actions through real subcommands. This keeps us schema-proof and respects
+  each tool's invariants (both take a lock and rewrite atomically; a GUI
+  parsing their files behind their back races those writes).
+- **Two backends, one UI.** The app is driven by `flow` OR by the praxis
+  harness (`prx`), picked in Settings → "Work source". They are not
+  feature-identical, and the difference is declared — not faked — through
+  `BackendCapabilities`: a pane whose backing concept does not exist (praxis
+  has no playbooks, no `flow stats`) is HIDDEN rather than shown empty.
 - **`FlowBarCore`** (library): pure data/logic, no UI.
   - `Models.swift` / `EntityModels.swift` — `FlowTask`, `Project`, `Playbook`,
     `PlaybookRun`, `Owner`, `TagCount`, `DashboardMetrics`.
   - `Markdown.swift` — block-level markdown parser (headings, paragraphs,
     lists incl. ordered/nested/checkbox, fenced code, tables, blockquotes,
     rules). Pure data, no AppKit, so the harness covers it.
-  - `FlowClient.swift` — binary discovery (+ a generous PATH so GUI launches
-    find `flow`/`claude`), `Process` runner, entity reads (JSON; owners/tags
-    via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions,
-    and `sessionInfo`/`parseSessionInfo` (a task's harness session binding plus
-    the state of any `flow do --auto` run on it).
+  - `CLI.swift` — process plumbing shared by both backends: binary discovery
+    (+ a generous PATH so GUI launches find `flow`/`prx`/`claude`), the
+    capture-and-wait runner, the TCC-disclaiming spawn, the detached spawn the
+    self-upgrade needs, and the log. It knows how to run A binary and nothing
+    about which one — env and disclaim policy are the caller's.
+  - `WorkBackend.swift` — the protocol the whole UI is written against, plus
+    `BackendKind`, `BackendCapabilities`, `SessionInfo`, and `Backend.active()`
+    (resolved from UserDefaults per call, so the toggle takes effect on the
+    next refresh instead of at relaunch).
+  - `FlowClient.swift` — the flow backend: its environment (`FLOW_ROOT`,
+    `FLOW_TERM`), entity reads (JSON; owners/tags via text parsers),
+    `doTask`/`runPlaybook`/owner actions, and `sessionInfo`/`parseSessionInfo`
+    (a task's harness session binding plus the state of any `flow do --auto`
+    run on it).
+  - `PraxisClient.swift` — the praxis backend: `prx work ... -json` for tasks,
+    projects, briefs, notes and tags; `prx schedule ... -json` for the
+    recurring agents that stand in for flow's owners; and, for "switch to a
+    task", a `.command` script opened through `/usr/bin/open` that execs
+    `prx -work <slug>` in the task's work dir.
   - `SessionTranscript.swift` — `TranscriptParser` folds Claude Code session
     JSONL into a `SessionActivity`, plus `TranscriptTime` (a hand-rolled
     ISO-8601 scanner). Pure and incremental, so the harness covers it.
@@ -119,6 +140,15 @@ state lives in a window you are not looking at when you click, and what it
 suppresses is the prompt that stops a command you did not mean to run. The menu
 exists because a modifier alone is invisible, and because the flag being inert
 on live tasks means a first attempt very often lands on one and looks broken.
+
+Under praxis there is no `do` to delegate to — `prx` **is** the session, not a
+launcher — so flow-bar opens the terminal itself: it writes a `.command` script
+that cds to the task's work dir and `exec`s `prx -work <slug>`, then hands it to
+`/usr/bin/open` (optionally `-a <the terminal you picked>`). `open` is
+LaunchServices, not Apple events, so this path needs no Automation grant. `exec`
+means the tab IS the session: closing it ends the session and leaves no stray
+shell. It always opens a NEW session bound to the task rather than focusing an
+existing tab — praxis has no "focus that tab" primitive to call.
 
 ## Session alerts
 
@@ -420,9 +450,10 @@ subcommands.
 ## Read-mostly philosophy
 
 The app favours rich read views + only **safe** mutations inline (owner
-pause/resume). Actions that spawn a terminal — switching to a task
-(`flow do`) and running a playbook (`flow run playbook`) — are explicit,
-user-initiated, and need the one-time Accessibility grant.
+pause/resume, schedule enable/disable). Actions that spawn a terminal —
+switching to a task (`flow do`, or the `prx -work` script) and running a
+playbook (`flow run playbook`) — are explicit, user-initiated, and need the
+one-time Accessibility grant on the flow path.
 
 ## Status
 

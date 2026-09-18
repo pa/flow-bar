@@ -39,6 +39,26 @@ enum Section: String, CaseIterable, Identifiable {
         default: return false
         }
     }
+
+    /// The title under the active backend. Recurring unattended agents are
+    /// flow’s “owners” and praxis’s “schedules” — the same pane, and calling it
+    /// by the name the user’s CLI uses is the difference between recognising it
+    /// and hunting for it.
+    func title(_ capabilities: BackendCapabilities) -> String {
+        self == .owners ? capabilities.recurringTitle : title
+    }
+
+    /// The rail for a backend: a pane whose backing concept does not exist is
+    /// left out rather than shown permanently empty.
+    static func visible(_ capabilities: BackendCapabilities) -> [Section] {
+        allCases.filter { section in
+            switch section {
+            case .playbooks: return capabilities.playbooks
+            case .owners: return capabilities.recurring
+            default: return true
+            }
+        }
+    }
 }
 
 /// A navigation destination a dashboard tile can route to.
@@ -92,6 +112,15 @@ struct MenuContentView: View {
         }
         .onAppear { prepareForOpen() }
         .onChange(of: store.openNonce) { prepareForOpen() }
+        // Switching backend can retire the pane you are standing on (praxis has
+        // no playbooks). Landing on a rail item that no longer exists would
+        // leave the pane blank with no way back, so step to the list everyone
+        // has.
+        .onChange(of: store.backendKind) {
+            guard !Section.visible(store.capabilities).contains(section) else { return }
+            store.closePeek(); store.cancelCreate()
+            section = .tasks
+        }
         // A task's "Remind me" bell seeds a draft while the popover is open —
         // jump to the Reminders section so its compose form appears.
         .onChange(of: store.pendingReminderDraft?.id) { _, id in
@@ -132,7 +161,7 @@ struct MenuContentView: View {
 
     private var rail: some View {
         VStack(spacing: 4) {
-            ForEach(Section.allCases) { s in
+            ForEach(Section.visible(store.capabilities)) { s in
                 Button {
                     store.closePeek(); store.cancelCreate()
                     section = s
@@ -157,7 +186,7 @@ struct MenuContentView: View {
                         .contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
-                .help(s.title)
+                .help(s.title(store.capabilities))
             }
             Spacer()
         }
@@ -246,7 +275,7 @@ struct MenuContentView: View {
     /// The tasks section is a single rail item but has status tabs, so its
     /// header reflects the active tab (e.g. "Archived") rather than "In progress".
     private var headerTitle: String {
-        section == .tasks ? taskFilter.rawValue : section.title
+        section == .tasks ? taskFilter.rawValue : section.title(store.capabilities)
     }
 
     private var header: some View {

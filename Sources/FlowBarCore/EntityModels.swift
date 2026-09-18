@@ -55,6 +55,14 @@ public struct Owner: Identifiable, Hashable, Sendable {
     public var nextTick: String?    // ISO timestamp
     public var nextTickRelative: String?  // e.g. "in 1h59m0s"
     public var id: String { slug }
+
+    /// How often it runs, ready to display: "every 3h", "every day at 09:00".
+    /// Built here rather than at each label, because the two backends phrase a
+    /// cadence differently (flow has only intervals; a praxis schedule can also
+    /// fire at a wall-clock time) and only one of them can own the wording.
+    public var cadenceLabel: String {
+        every.isEmpty ? "cadence unknown" : "every \(every)"
+    }
     public init(slug: String, status: String, every: String,
                 nextTick: String?, nextTickRelative: String?) {
         self.slug = slug; self.status = status; self.every = every

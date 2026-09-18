@@ -55,8 +55,12 @@ struct DashboardView: View {
 
                 groupLabel("Automation")
                 LazyVGrid(columns: columns, spacing: 8) {
-                    tile("\(m.activeOwnerCount)", "owners", .purple) { onNavigate(.section(.owners)) }
-                    tile("\(m.runsRunning)", "runs live", m.runsRunning > 0 ? .green : .secondary) { onNavigate(.section(.playbooks)) }
+                    tile("\(m.activeOwnerCount)", store.capabilities.recurringTitle.lowercased(), .purple) { onNavigate(.section(.owners)) }
+                    // Playbook runs are flow's; praxis has no equivalent, and a
+                    // tile that can only ever read 0 is worse than no tile.
+                    if store.capabilities.playbooks {
+                        tile("\(m.runsRunning)", "runs live", m.runsRunning > 0 ? .green : .secondary) { onNavigate(.section(.playbooks)) }
+                    }
                     tile("\(m.activeProjectCount)", "projects", .blue) { onNavigate(.section(.projects)) }
                 }
 

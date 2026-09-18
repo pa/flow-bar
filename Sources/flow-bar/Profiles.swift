@@ -45,7 +45,7 @@ extension Store {
         activeProfileID = id
         persistProfiles()
         syncActiveRoot()
-        reloadForProfileSwitch()
+        reloadForSourceSwitch()
     }
 
     /// Pick a folder (native panel), validate it looks like a flow root, then
@@ -92,7 +92,7 @@ extension Store {
         activeProfileID = Profile.defaultID
         persistProfiles()
         syncActiveRoot()
-        reloadForProfileSwitch()
+        reloadForSourceSwitch()
     }
 
     // MARK: Private
@@ -112,18 +112,25 @@ extension Store {
         UserDefaults.standard.set(root, forKey: activeFlowRootKey)
     }
 
-    /// Active root changed — drop cached data and reload against the new root.
-    private func reloadForProfileSwitch() {
-        // Slugs are root-scoped: a check made under root A must never be fired
-        // against root B. Easy to miss because this is reachable from the footer
-        // without closing the popover.
+    /// The source of truth changed — a different flow root, or a different
+    /// backend entirely. Drop everything cached and reload against the new one.
+    func reloadForSourceSwitch() {
+        // Slugs are source-scoped: a check made under root A must never be fired
+        // against root B, and a praxis slug must never be fired at flow. Easy to
+        // miss because both switches are reachable without closing the popover.
         selectedTaskSlugs = []
         projectTasks = []
         ownerTasks = []
         browseTasks = []
         playbooks = []
         runs = []
+        // Tags, owners and projects live inside `metrics`, so that one nil
+        // drops all three.
         metrics = nil
+        stats = nil
+        taskDetail = nil
+        peekedSlug = nil
+        errorText = nil
         refresh()
         refreshMetrics()
     }

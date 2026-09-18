@@ -3,6 +3,39 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## Unreleased
+
+### Added
+
+- **Pick your work source: `flow` or the praxis harness (`prx`).** Settings gained
+  a **Work source** section. On praxis, tasks, projects, briefs, notes and tags
+  come from `prx work … -json`, and flow's owners are replaced by praxis
+  schedules (`prx schedule … -json`) — same pane, named the way your CLI names
+  it. What praxis has no equivalent of is hidden rather than faked: no Playbooks
+  rail item, no runs tile, no AI-memory card. Existing installs are untouched —
+  an absent setting still means `flow`.
+- **Switching to a task under praxis** opens your terminal on a `prx` session
+  already bound to the task, rooted in its work directory, so notes written
+  there are attributed. It goes through `open` rather than AppleScript, so
+  unlike the flow path it needs no Automation grant.
+- **Live sessions work under praxis too.** flow-bar reads praxis session
+  transcripts (`~/.praxis/agent/sessions/<id>/session.jsonl`) alongside Claude
+  Code and Codex, so the menubar alert and the Needs-you list behave the same
+  whichever harness is running.
+- **A Check button** next to the work source reports which binary answered and
+  whether it has the commands the app needs. It exists because a `prx` too old
+  to have `work` otherwise looks exactly like having no tasks.
+
+### Fixed
+
+- **A wedged CLI can no longer hang the app.** Every read is now bounded and the
+  child is killed if it overruns. Found the hard way: `prx` treats arguments it
+  does not recognise as a *prompt* and tries to become an interactive session,
+  so asking an older `prx` for tasks hung forever with the popover spinning.
+- **Large CLI output can no longer deadlock a read.** stdout and stderr are
+  drained concurrently; reading them in sequence stalls as soon as the child
+  fills the other pipe's buffer.
+
 ## v0.4.3 — 2026-09-17
 
 ### Fixed
