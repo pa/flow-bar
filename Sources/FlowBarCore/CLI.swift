@@ -131,40 +131,93 @@ public enum CLI {
 
         try process.run()
 
-        // Drain both pipes on their own queues: reading them in sequence
-        // deadlocks as soon as the child fills the OTHER pipe's buffer, and a
-        // task list with long briefs is well past 64KB. Each read returns when
-        // its pipe closes, which is the child exiting — or us killing it.
-        let outBox = DataBox(), errBox = DataBox()
-        let group = DispatchGroup()
-        let queue = DispatchQueue(label: "cloud.facets.flow-bar.cli", attributes: .concurrent)
-        queue.async(group: group) { outBox.value = outPipe.fileHandleForReading.readDataToEndOfFile() }
-        queue.async(group: group) { errBox.value = errPipe.fileHandleForReading.readDataToEndOfFile() }
+        // Drain both pipes on THIS thread with poll(2), and spawn nothing.
+        //
+        // Two constraints have to hold at once. Reading the pipes in sequence
+        // deadlocks as soon as the child fills the other one's buffer, and a
+        // task list with long briefs is well past 64KB — so both must be
+        // watched together. But handing each read to its own queue costs two
+        // extra threads per call, and the app issues ~16 of these at once from
+        // `Task.detached`, i.e. on the Swift COOPERATIVE pool, which is capped
+        // near the core count. Blocking there is already the documented
+        // anti-pattern; needing 3x threads to service it starves the pool, and
+        // then the reads that would release the caller can never be scheduled.
+        // Measured: 16 concurrent calls via Task.detached hung indefinitely,
+        // the same 16 via DispatchQueue.global() finished in 1.1s.
+        //
+        // poll() satisfies both: one thread, both fds, and a deadline that is
+        // always bounded.
+        let (outData, errData, timedOut) = drain(
+            out: outPipe.fileHandleForReading.fileDescriptor,
+            err: errPipe.fileHandleForReading.fileDescriptor,
+            deadline: Date().addingTimeInterval(timeout))
 
-        if group.wait(timeout: .now() + timeout) == .timedOut {
+        if timedOut {
             let command = "\(binary) \(args.joined(separator: " "))"
             log("run: \(command)  ->  TIMEOUT after \(Int(timeout))s, killing pid \(process.processIdentifier)")
             process.terminate()
-            // Give it a moment to die politely, then insist. Either way the
-            // pipes close, which is what releases the two reads above.
-            if group.wait(timeout: .now() + 2) == .timedOut, process.isRunning {
+            // SIGTERM, then insist. No unbounded wait anywhere on this path: a
+            // call that cannot be cleaned up must still return to its caller,
+            // or the thread it is on is gone for the life of the process.
+            let graceUntil = Date().addingTimeInterval(2)
+            while process.isRunning, Date() < graceUntil { usleep(50_000) }
+            if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
-                group.wait()
+                let killUntil = Date().addingTimeInterval(2)
+                while process.isRunning, Date() < killUntil { usleep(50_000) }
             }
-            process.waitUntilExit()
             throw CLIError.timedOut(command: command, seconds: timeout)
         }
         process.waitUntilExit()
 
-        let stderr = String(data: errBox.value, encoding: .utf8) ?? ""
-        return (outBox.value, stderr, process.terminationStatus)
+        let stderr = String(data: errData, encoding: .utf8) ?? ""
+        return (outData, stderr, process.terminationStatus)
     }
 
-    /// A box for one pipe's bytes, handed between the reading queue and the
-    /// caller. The two reads never touch the same box, and the caller only
-    /// reads after `group.wait` has ordered them.
-    private final class DataBox: @unchecked Sendable {
-        var value = Data()
+    /// Read two pipes to EOF on the calling thread, or until `deadline`.
+    ///
+    /// Returns what each produced and whether the deadline was hit. A closed or
+    /// errored fd is retired rather than retried, so a child that closes one
+    /// stream early does not spin.
+    private static func drain(out outFD: Int32, err errFD: Int32,
+                              deadline: Date) -> (Data, Data, Bool)
+    {
+        var outData = Data(), errData = Data()
+        var fds = [pollfd(fd: outFD, events: Int16(POLLIN), revents: 0),
+                   pollfd(fd: errFD, events: Int16(POLLIN), revents: 0)]
+        var live = 2
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+
+        while live > 0 {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 { return (outData, errData, true) }
+            let ms = Int32(min(remaining * 1000, 60_000))
+
+            let ready = poll(&fds, nfds_t(fds.count), ms)
+            if ready < 0 {
+                if errno == EINTR { continue }
+                break          // the fds are unusable; report what we have
+            }
+            if ready == 0 { return (outData, errData, true) }
+
+            for i in fds.indices where fds[i].fd >= 0 && fds[i].revents != 0 {
+                let n = buffer.withUnsafeMutableBytes {
+                    read(fds[i].fd, $0.baseAddress, $0.count)
+                }
+                if n > 0 {
+                    buffer.withUnsafeBytes { raw in
+                        let bytes = raw.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                        if i == 0 { outData.append(bytes, count: n) }
+                        else { errData.append(bytes, count: n) }
+                    }
+                    continue   // more may be buffered; poll again
+                }
+                if n < 0 && (errno == EINTR || errno == EAGAIN) { continue }
+                fds[i].fd = -1   // EOF, or an error we cannot read past
+                live -= 1
+            }
+        }
+        return (outData, errData, false)
     }
 
     /// Spawn a short-lived child that opens a terminal, BLOCK until it exits,

@@ -45,6 +45,66 @@ if CommandLine.arguments.contains("--detach-test") {
     exit(ok ? 0 : 1)
 }
 
+// Concurrency check: the app fires its dashboard reads at once, and a hang that
+// only appears under concurrency is invisible to every sequential test we have.
+// Reproduces it here, where it can be measured.
+if CommandLine.arguments.contains("--concurrent-test") {
+    // Mirrors what the app actually does: the dashboard refresh fires ~16 reads
+    // at once against a real binary, not one cheap `echo`. `--heavy` uses the
+    // configured prx so each call holds its threads for real work.
+    let heavy = CommandLine.arguments.contains("--heavy")
+    let n = heavy ? 16 : 6
+    let bin = heavy ? PraxisClient.binary() : "/bin/echo"
+    let callArgs: [String] = heavy ? ["work", "list", "tasks", "-json"] : []
+    print("firing \(n) concurrent CLI.run calls against \(bin)…")
+    // `--swifttask` uses Task.detached, which is what the app does. That runs on
+    // the COOPERATIVE pool (capped at core count), where a blocking call is the
+    // documented anti-pattern — and is the one difference left between this
+    // harness and the app.
+    if CommandLine.arguments.contains("--swifttask") {
+        let started = Date()
+        let sem = DispatchSemaphore(value: 0)
+        for i in 0..<n {
+            Task.detached(priority: .userInitiated) {
+                let t0 = Date()
+                do {
+                    let (out, _, code) = try CLI.run(bin, callArgs.isEmpty ? ["call-\(i)"] : callArgs,
+                                                     timeout: 20)
+                    print("  call-\(i): exit=\(code) \(Int(Date().timeIntervalSince(t0) * 1000))ms  \(out.count) bytes")
+                } catch {
+                    print("  call-\(i): FAILED after \(Int(Date().timeIntervalSince(t0) * 1000))ms — \(error)")
+                }
+                sem.signal()
+            }
+        }
+        for _ in 0..<n { sem.wait() }
+        print("total \(Int(Date().timeIntervalSince(started) * 1000))ms  (Task.detached)")
+        exit(0)
+    }
+
+    let started = Date()
+    let group = DispatchGroup()
+    for i in 0..<n {
+        group.enter()
+        DispatchQueue.global().async {
+            let t0 = Date()
+            do {
+                let (out, _, code) = try CLI.run(bin, callArgs.isEmpty ? ["call-\(i)"] : callArgs,
+                                                 timeout: 20)
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                print("  call-\(i): exit=\(code) \(ms)ms  \(out.count) bytes")
+            } catch {
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                print("  call-\(i): FAILED after \(ms)ms — \(error)")
+            }
+            group.leave()
+        }
+    }
+    group.wait()
+    print("total \(Int(Date().timeIntervalSince(started) * 1000))ms")
+    exit(0)
+}
+
 // Which CLI to exercise. Defaults to whatever the app is set to, so a bare run
 // reproduces what the user sees; `--backend praxis` and `--prx <path>` are how a
 // prx build gets exercised before it is the installed one.

@@ -22,7 +22,7 @@ public struct PraxisClient: Sendable, WorkBackend {
     // MARK: Environment
 
     /// The binary to run: the user's explicit path, else `prx` on PATH.
-    static func binary() -> String {
+    public static func binary() -> String {
         let explicit = (UserDefaults.standard.string(forKey: praxisBinaryKey) ?? "")
             .trimmingCharacters(in: .whitespaces)
         return explicit.isEmpty ? BackendKind.praxis.binaryName : explicit
@@ -108,11 +108,21 @@ public struct PraxisClient: Sendable, WorkBackend {
         var notes: [NotePayload]?
         var holders: [String]?
         var live: Bool?
+        /// Every stretch a session spent on this task, oldest first. This is
+        /// what makes "open the task" able to RESUME rather than start over.
+        var segments: [SegmentPayload]?
 
         enum CodingKeys: String, CodingKey {
-            case slug, name, status, archived, brief, notes, holders, live
+            case slug, name, status, archived, brief, notes, holders, live, segments
             case workDir = "work_dir"
         }
+    }
+
+    private struct SegmentPayload: Decodable {
+        var session: String?
+        var start: String?
+        var end: String?
+        var open: Bool?
     }
 
     private struct SchedulePayload: Decodable {
@@ -367,8 +377,10 @@ public struct PraxisClient: Sendable, WorkBackend {
     public func doTask(_ slug: String, skipPermissions: Bool = false)
         throws -> (stderr: String, code: Int32)
     {
-        let workDir = (try? show(slug))?.workDir
-        let script = try Self.writeLaunchScript(slug: slug, workDir: workDir,
+        let payload = try? show(slug)
+        let resume = Self.resumableSession(payload)
+        let script = try Self.writeLaunchScript(slug: slug, workDir: payload?.workDir,
+                                                resume: resume,
                                                 skipPermissions: skipPermissions)
         var args = [String]()
         if let app = Self.terminalApp() { args += ["-a", app] }
@@ -377,10 +389,41 @@ public struct PraxisClient: Sendable, WorkBackend {
         return (stderr, code)
     }
 
-    /// The `.command` script the terminal runs: cd to the task's directory,
-    /// then become the session. `exec` means the terminal tab IS the session —
+    /// The session to reopen for a task: the most recent one that is not still
+    /// live.
+    ///
+    /// Picking up where the task left off is the whole point — a blank session
+    /// in the right directory still makes you re-explain everything. A LIVE
+    /// session is excluded on purpose: it is already open in some terminal, and
+    /// a second process serving the same session id presents an empty twin as
+    /// the real one. Nothing to resume means a fresh session bound to the task.
+    private static func resumableSession(_ payload: ShowPayload?) -> String? {
+        guard let payload else { return nil }
+        return mostRecentResumable(
+            segments: (payload.segments ?? []).compactMap { segment in
+                guard let id = segment.session, !id.isEmpty else { return nil }
+                return (id: id, isOpen: segment.open == true)
+            },
+            live: Set((payload.holders ?? []).filter { !$0.isEmpty }))
+    }
+
+    /// The selection itself, over plain values so it can be tested without a
+    /// store. `segments` is oldest-first, as the CLI emits it.
+    public static func mostRecentResumable(segments: [(id: String, isOpen: Bool)],
+                                           live: Set<String>) -> String?
+    {
+        segments.reversed().first { !$0.isOpen && !live.contains($0.id) }?.id
+    }
+
+    /// The `.command` script the terminal runs: move to the task's directory,
+    /// then become its session. `exec` means the terminal tab IS the session —
     /// closing it ends the session, and no stray shell outlives it.
+    ///
+    /// With a `resume` id the session is REOPENED, so the task continues with
+    /// its history instead of starting blank. Without one, a new session starts
+    /// already bound to the task (`-work`), so whatever it writes is attributed.
     public static func writeLaunchScript(slug: String, workDir: String?,
+                                         resume: String? = nil,
                                          skipPermissions: Bool = false) throws -> String
     {
         let prx = try CLI.resolve(binary())
@@ -392,7 +435,11 @@ public struct PraxisClient: Sendable, WorkBackend {
         // praxis spells "don't stop to ask" as a permission MODE, validated
         // against ask|auto|yolo (praxis/options.go) rather than a bare flag.
         let mode = skipPermissions ? " -permission-mode yolo" : ""
-        lines.append("exec \(shellQuote(prx)) -work \(shellQuote(slug))\(mode)")
+        if let resume, !resume.isEmpty {
+            lines.append("exec \(shellQuote(prx)) -resume \(shellQuote(resume))\(mode)")
+        } else {
+            lines.append("exec \(shellQuote(prx)) -work \(shellQuote(slug))\(mode)")
+        }
 
         let path = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("flow-bar-prx-\(slug)-\(ProcessInfo.processInfo.globallyUniqueString).command")

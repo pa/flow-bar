@@ -90,6 +90,53 @@ func runPraxisClientTests() {
         T.equal(perms?.int16Value, 0o755, "executable")
     }
 
+    T.test("resume picks the newest session that is not still live") {
+        // Oldest-first, as the CLI emits it.
+        let segs: [(id: String, isOpen: Bool)] = [
+            ("sess-old", false), ("sess-mid", false), ("sess-new", false),
+        ]
+        T.equal(PraxisClient.mostRecentResumable(segments: segs, live: []), "sess-new",
+                "newest wins")
+        // The newest is still running somewhere: resuming it would serve the
+        // same session id twice, which shows an empty twin as the real one.
+        T.equal(PraxisClient.mostRecentResumable(segments: segs, live: ["sess-new"]), "sess-mid",
+                "a live session is skipped, not resumed")
+        let withOpen: [(id: String, isOpen: Bool)] = [("sess-a", false), ("sess-b", true)]
+        T.equal(PraxisClient.mostRecentResumable(segments: withOpen, live: []), "sess-a",
+                "an open segment is skipped even when holders are not reported")
+        T.expect(PraxisClient.mostRecentResumable(segments: [], live: []) == nil,
+                 "no history -> nothing to resume")
+        T.expect(PraxisClient.mostRecentResumable(segments: [("only", true)], live: ["only"]) == nil,
+                 "every candidate live -> nothing to resume")
+    }
+
+    T.test("launch script resumes when there is a session, binds when there is not") {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: praxisBinaryKey)
+        defaults.set("/bin/echo", forKey: praxisBinaryKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: praxisBinaryKey) }
+            else { defaults.removeObject(forKey: praxisBinaryKey) }
+        }
+
+        let resumed = try PraxisClient.writeLaunchScript(slug: "my-task", workDir: "/tmp",
+                                                         resume: "01a0-abcd")
+        defer { try? FileManager.default.removeItem(atPath: resumed) }
+        let resumedBody = try String(contentsOfFile: resumed, encoding: .utf8)
+        T.expect(resumedBody.contains("exec '/bin/echo' -resume '01a0-abcd'"),
+                 "reopens the session rather than starting blank")
+        T.expect(!resumedBody.contains("-work"),
+                 "a resumed session carries its own binding; -work would be redundant")
+        T.expect(resumedBody.contains("cd '/tmp'"), "still moves to the workspace first")
+
+        let fresh = try PraxisClient.writeLaunchScript(slug: "my-task", workDir: "/tmp",
+                                                       resume: nil)
+        defer { try? FileManager.default.removeItem(atPath: fresh) }
+        let freshBody = try String(contentsOfFile: fresh, encoding: .utf8)
+        T.expect(freshBody.contains("exec '/bin/echo' -work 'my-task'"),
+                 "no history -> a new session, bound so its notes are attributed")
+    }
+
     T.test("launch script falls back to home for a task with no work dir") {
         let defaults = UserDefaults.standard
         let previous = defaults.string(forKey: praxisBinaryKey)
