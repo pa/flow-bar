@@ -390,6 +390,16 @@ public struct PraxisClient: Sendable, WorkBackend {
     {
         let payload = try? show(slug)
         let resume = Self.resumableSession(payload)
+
+        // Already on screen? Go there. Opening a second tab on the same session
+        // is what flow's `do` avoids by focusing the existing one, and without
+        // it every click stacks another tab serving the session you are already
+        // looking at.
+        if Self.focusExistingTab(slug: slug, session: resume) {
+            CLI.log("praxis do \(slug): focused the existing tab")
+            return ("already open", 0)
+        }
+
         let script = try Self.writeLaunchScript(slug: slug, workDir: payload?.workDir,
                                                 resume: resume,
                                                 skipPermissions: skipPermissions)
@@ -398,6 +408,157 @@ public struct PraxisClient: Sendable, WorkBackend {
         args.append(script)
         let (_, stderr, code) = try CLI.run("/usr/bin/open", args, env: Self.praxisEnv())
         return (stderr, code)
+    }
+
+    // MARK: Focusing a tab that already exists
+
+    /// Focus the terminal tab already serving this task, if there is one.
+    ///
+    /// Same mechanism flow uses: a running session is found in `ps` by the id
+    /// in its argv, its controlling tty identifies the tab, and AppleScript
+    /// selects it. The link exists because the launch script `exec`s prx, so
+    /// the tab's own process carries `-resume <session>` or `-work <slug>`.
+    ///
+    /// Returns false whenever the tab cannot be identified — no match, a
+    /// session with no controlling terminal (every `prx sdk` run), or a
+    /// terminal that is not scriptable — and the caller opens a new tab, which
+    /// is the behaviour without this.
+    public static func focusExistingTab(slug: String, session: String?) -> Bool {
+        guard let app = terminalApp(), let script = focusScript(app: app) else { return false }
+        guard let rows = try? CLI.run("/bin/ps", ["-axo", "pid,tty,command"], timeout: 10),
+              let text = String(data: rows.stdout, encoding: .utf8)
+        else { return false }
+        // argv first — exact, and covers every tab flow-bar opened, since its
+        // launch script execs prx with the id. A session someone started by
+        // hand carries nothing in argv, so fall back to the harness's own
+        // ownership record, which names the pid holding the session.
+        guard let tty = ttyServing(slug: slug, session: session, psOutput: text)
+            ?? session.flatMap({ ttyFromOwnerRecord(sessionID: $0, psOutput: text) })
+        else { return false }
+
+        let source = script.replacingOccurrences(of: "%TTY%", with: appleScriptEscape(tty))
+        guard let result = try? CLI.run("/usr/bin/osascript", ["-e", source], timeout: 15),
+              let out = String(data: result.stdout, encoding: .utf8)
+        else { return false }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines) == "ok"
+    }
+
+    /// The controlling tty of a prx process serving this task, from `ps` output.
+    ///
+    /// Pure, so the row matching is testable without processes. A session id is
+    /// matched first because it is exact; the slug is the fallback for a tab
+    /// opened before the session existed. Rows without a controlling terminal
+    /// (`??`) are skipped: those are `prx sdk` runs, which have no tab.
+    public static func ttyServing(slug: String, session: String?, psOutput: String) -> String? {
+        let needles = [session, "-work \(slug)"].compactMap { $0 }.filter { !$0.isEmpty }
+        guard !needles.isEmpty else { return nil }
+
+        for needle in needles {
+            for line in psOutput.split(separator: "\n") {
+                guard line.contains(needle) else { continue }
+                // `pid tty command`: the tty is the second field.
+                let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+                guard fields.count >= 3 else { continue }
+                let tty = String(fields[1])
+                guard tty != "??", tty != "?", !tty.isEmpty else { continue }
+                return tty.hasPrefix("/dev/") ? tty : "/dev/" + tty
+            }
+        }
+        return nil
+    }
+
+    /// The tty of the process the harness records as holding this session.
+    ///
+    /// `<agentDir>/sessions/.owner/<id>.json` carries the owning pid. Most of
+    /// those are `prx sdk` runs with no controlling terminal, which is why this
+    /// is the fallback and not the primary source — but an interactive session
+    /// started by hand appears here and nowhere else.
+    ///
+    /// The pid is checked against the SAME `ps` output rather than trusted: a
+    /// record outlives its process, and a recycled pid pointing at an unrelated
+    /// program would otherwise focus a stranger's tab.
+    public static func ttyFromOwnerRecord(sessionID: String, psOutput: String) -> String? {
+        guard SessionLocator.isValidSessionID(sessionID) else { return nil }
+        let record = URL(fileURLWithPath: praxisAgentDir())
+            .appendingPathComponent("sessions/.owner/\(sessionID).json")
+        guard let data = try? Data(contentsOf: record),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pid = object["pid"] as? Int, pid > 0
+        else { return nil }
+
+        for line in psOutput.split(separator: "\n") {
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard fields.count >= 3, Int(fields[0]) == pid else { continue }
+            guard line.contains("prx") else { return nil }   // pid was recycled
+            let tty = String(fields[1])
+            guard tty != "??", tty != "?", !tty.isEmpty else { return nil }
+            return tty.hasPrefix("/dev/") ? tty : "/dev/" + tty
+        }
+        return nil
+    }
+
+    /// The praxis agent directory the app is pointed at.
+    static func praxisAgentDir() -> String {
+        if let dir = UserDefaults.standard.string(forKey: praxisAgentDirKey), !dir.isEmpty {
+            return (dir as NSString).expandingTildeInPath
+        }
+        if let env = ProcessInfo.processInfo.environment["PRAXIS_CODING_AGENT_DIR"], !env.isEmpty {
+            return env
+        }
+        return NSHomeDirectory() + "/.praxis/agent"
+    }
+
+    /// AppleScript that selects the tab whose tty matches, or reports "miss".
+    ///
+    /// Only iTerm2 and Terminal expose a tty per tab; the others in the picker
+    /// have no scriptable way to find the right one, so they get a new tab
+    /// rather than a wrong one. iTerm nests sessions inside tabs, Terminal does
+    /// not — hence two scripts rather than one with a branch.
+    public static func focusScript(app: String) -> String? {
+        switch app {
+        case "iTerm":
+            return """
+            tell application "iTerm2"
+              activate
+              repeat with w in windows
+                repeat with t in tabs of w
+                  repeat with s in sessions of t
+                    if tty of s is "%TTY%" then
+                      select w
+                      tell t to select
+                      tell s to select
+                      return "ok"
+                    end if
+                  end repeat
+                end repeat
+              end repeat
+              return "miss"
+            end tell
+            """
+        case "Terminal":
+            return """
+            tell application "Terminal"
+              activate
+              repeat with w in windows
+                repeat with t in tabs of w
+                  if tty of t is "%TTY%" then
+                    set frontmost of w to true
+                    set selected of t to true
+                    return "ok"
+                  end if
+                end repeat
+              end repeat
+              return "miss"
+            end tell
+            """
+        default:
+            return nil
+        }
+    }
+
+    public static func appleScriptEscape(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     /// The session to reopen for a task: the most recent one that actually
