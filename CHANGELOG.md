@@ -28,13 +28,32 @@ the GitHub release notes when a version is tagged.
 
 ### Fixed
 
-- **A wedged CLI can no longer hang the app.** Every read is now bounded and the
+- **Every pane showing zero, and a spinner that never stopped.** The dashboard
+  fires ~16 CLI reads at once from `Task.detached`, which runs on Swift's
+  cooperative thread pool — capped near the core count. Draining each child's
+  two pipes on their own queues needed three threads per call, so at that
+  concurrency the pool starved and the reads that would release each caller
+  could never be scheduled; an unbounded wait on the cleanup path then lost the
+  thread for good, and the app degraded until every call timed out. Both pipes
+  are now drained on the caller's own thread with `poll(2)` and a deadline: no
+  extra threads, no unbounded wait. The 16-call reproduction went from hanging
+  indefinitely to 634ms.
+- **A wedged CLI can no longer hang the app.** Every read is bounded and the
   child is killed if it overruns. Found the hard way: `prx` treats arguments it
   does not recognise as a *prompt* and tries to become an interactive session,
   so asking an older `prx` for tasks hung forever with the popover spinning.
-- **Large CLI output can no longer deadlock a read.** stdout and stderr are
-  drained concurrently; reading them in sequence stalls as soon as the child
-  fills the other pipe's buffer.
+- **Large CLI output can no longer deadlock a read.** Both streams are watched
+  together; reading them in sequence stalls as soon as the child fills the
+  other pipe's buffer, which a task list with long briefs comfortably exceeds.
+
+### Changed
+
+- **Opening a task under praxis resumes its session** instead of starting a
+  blank one: flow-bar moves to the task's work directory and reopens the most
+  recent session that is not still live (`prx -resume`). A session that is
+  already running somewhere is deliberately skipped — serving one session id
+  twice presents an empty twin as the real one — and a task with no history
+  still gets a fresh session bound to it.
 
 ## v0.5.1 — 2026-09-20
 
