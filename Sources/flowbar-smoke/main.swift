@@ -143,6 +143,35 @@ if CommandLine.arguments.contains("--concurrent-test") {
     exit(0)
 }
 
+// `--resume-for <slug>` answers "what will clicking this task actually open?"
+// against the real store, without opening a terminal to find out.
+if let i = CommandLine.arguments.firstIndex(of: "--resume-for"),
+   i + 1 < CommandLine.arguments.count
+{
+    let slug = CommandLine.arguments[i + 1]
+    if let j = CommandLine.arguments.firstIndex(of: "--prx"), j + 1 < CommandLine.arguments.count {
+        UserDefaults.standard.set(CommandLine.arguments[j + 1], forKey: praxisBinaryKey)
+    }
+    do {
+        let plan = try PraxisClient().resumePlan(slug)
+        print("task:     \(slug)")
+        print("work dir: \(plan.workDir ?? "(none — falls back to home)")")
+        if let resume = plan.resume {
+            print("resumes:  \(resume)")
+        } else {
+            print("resumes:  (nothing with a conversation in it — starts a session bound to the task)")
+        }
+        let script = try PraxisClient.writeLaunchScript(slug: slug, workDir: plan.workDir,
+                                                        resume: plan.resume)
+        print("script:\n" + ((try? String(contentsOfFile: script, encoding: .utf8)) ?? ""))
+        try? FileManager.default.removeItem(atPath: script)
+    } catch {
+        FileHandle.standardError.write(Data("resume-for failed: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+}
+
 // Which CLI to exercise. Defaults to whatever the app is set to, so a bare run
 // reproduces what the user sees; `--backend praxis` and `--prx <path>` are how a
 // prx build gets exercised before it is the installed one.

@@ -366,8 +366,19 @@ public struct PraxisClient: Sendable, WorkBackend {
 
     // MARK: Actions
 
-    /// Open a terminal on the task: a session rooted in its work directory and
-    /// BOUND to it, so notes written there are attributed to this task.
+    /// What opening this task will do, without doing it: which directory the
+    /// session starts in, and which session (if any) gets reopened.
+    ///
+    /// Exposed because "it opened the wrong session" is otherwise only
+    /// diagnosable by opening a terminal and looking at what came up
+    /// (`flowbar-smoke --resume-for <slug>`).
+    public func resumePlan(_ slug: String) throws -> (workDir: String?, resume: String?) {
+        let payload = try show(slug)
+        return (payload.workDir, Self.resumableSession(payload))
+    }
+
+    /// Open a terminal on the task: its work directory, and the session it was
+    /// last worked in — reopened, not replaced.
     ///
     /// flow opens its own terminal (`flow do`); prx is the session, not a
     /// launcher, so flow-bar opens the terminal itself. It goes through
@@ -389,30 +400,58 @@ public struct PraxisClient: Sendable, WorkBackend {
         return (stderr, code)
     }
 
-    /// The session to reopen for a task: the most recent one that is not still
-    /// live.
+    /// The session to reopen for a task: the most recent one that actually
+    /// contains a conversation.
     ///
-    /// Picking up where the task left off is the whole point — a blank session
-    /// in the right directory still makes you re-explain everything. A LIVE
-    /// session is excluded on purpose: it is already open in some terminal, and
-    /// a second process serving the same session id presents an empty twin as
-    /// the real one. Nothing to resume means a fresh session bound to the task.
+    /// Two things learned the hard way, both from real store data:
+    ///
+    /// A segment's `open` flag is NOT liveness. It clears only when a session
+    /// ends cleanly, so every killed or abandoned session leaves one open
+    /// forever. Treating open as "in use" made every segment unresumable, so
+    /// each click started a blank session — which added another open segment,
+    /// and the next click did it again. One task had three empty sessions
+    /// (531 bytes, zero message records) stacked on top of the real one.
+    ///
+    /// A live session is NOT excluded either. `prx -resume` already answers
+    /// that case: a startup resume refused by the live writer falls through to
+    /// following it (`tui/run.go`, followOwnedStartup). Showing the session the
+    /// user pointed at beats opening an empty one next to it.
+    ///
+    /// So the only thing that disqualifies a session is having nothing in it.
     private static func resumableSession(_ payload: ShowPayload?) -> String? {
         guard let payload else { return nil }
-        return mostRecentResumable(
-            segments: (payload.segments ?? []).compactMap { segment in
-                guard let id = segment.session, !id.isEmpty else { return nil }
-                return (id: id, isOpen: segment.open == true)
-            },
-            live: Set((payload.holders ?? []).filter { !$0.isEmpty }))
+        let ids = (payload.segments ?? []).compactMap { segment -> String? in
+            guard let id = segment.session, !id.isEmpty else { return nil }
+            return id
+        }
+        return mostRecentResumable(segments: ids, hasConversation: hasConversation)
     }
 
     /// The selection itself, over plain values so it can be tested without a
     /// store. `segments` is oldest-first, as the CLI emits it.
-    public static func mostRecentResumable(segments: [(id: String, isOpen: Bool)],
-                                           live: Set<String>) -> String?
+    public static func mostRecentResumable(segments: [String],
+                                           hasConversation: (String) -> Bool) -> String?
     {
-        segments.reversed().first { !$0.isOpen && !live.contains($0.id) }?.id
+        segments.reversed().first(where: hasConversation)
+    }
+
+    /// Whether a praxis session transcript holds any conversation at all.
+    ///
+    /// A session that was opened and never used still has a header line, so
+    /// "the file exists" cannot answer this — the empty ones measured 531 bytes
+    /// with zero message records against 508KB and 152 for the real one. Only a
+    /// bounded prefix is read: the first message record sits immediately after
+    /// the header, so a session with any content declares itself in the first
+    /// few KB, and a 500KB transcript is never read to answer a yes/no.
+    public static func hasConversation(sessionID: String) -> Bool {
+        guard let url = SessionLocator.praxisTranscriptURL(sessionID: sessionID),
+              let handle = try? FileHandle(forReadingFrom: url)
+        else { return false }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: 64 * 1024),
+              let text = String(data: prefix, encoding: .utf8)
+        else { return false }
+        return text.contains("\"type\":\"message\"")
     }
 
     /// The `.command` script the terminal runs: move to the task's directory,

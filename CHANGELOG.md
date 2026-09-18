@@ -50,10 +50,17 @@ the GitHub release notes when a version is tagged.
 
 - **Opening a task under praxis resumes its session** instead of starting a
   blank one: flow-bar moves to the task's work directory and reopens the most
-  recent session that is not still live (`prx -resume`). A session that is
-  already running somewhere is deliberately skipped — serving one session id
-  twice presents an empty twin as the real one — and a task with no history
-  still gets a fresh session bound to it.
+  recent session that actually has a conversation in it (`prx -resume`). A task
+  with no such session still gets a fresh one bound to it.
+
+  The selection deliberately ignores two things that look relevant and are not.
+  A segment's "open" flag is not liveness — it only clears on a clean exit, so
+  abandoned sessions stay open forever; treating it as in-use made every
+  session unresumable, so each click opened a blank one and left another open
+  segment behind for the next click to trip over. And a session that IS live is
+  not skipped: `prx -resume` already falls through to following a session whose
+  live writer refuses the resume, which beats opening an empty session beside
+  the one you asked for.
 
 ## v0.5.1 — 2026-09-20
 
