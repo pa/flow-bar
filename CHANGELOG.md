@@ -23,6 +23,14 @@ the GitHub release notes when a version is tagged.
   already bound to the task, rooted in its work directory, so notes written
   there are attributed. It goes through `open` rather than AppleScript, so
   unlike the flow path it needs no Automation grant.
+- **Session alerts fire for praxis sessions.** The hook that makes a permission
+  prompt detectable at all — the transcript shows nothing until it is answered
+  — is now installed into the praxis harness's `settings.json` as well as
+  Claude Code's. praxis maps `Notification` onto its `attention_needed` event,
+  which fires exactly when the runtime starts blocking on you and cannot block
+  or delay it, so a wedged flow-bar still cannot get in the way of a prompt.
+  Rows read the harness's own wording where there is any: the question a
+  session stopped on, or “Bash needs approval”.
 - **Live sessions work under praxis too.** flow-bar reads praxis session
   transcripts (`~/.praxis/agent/sessions/<id>/session.jsonl`) alongside Claude
   Code and Codex, so the menubar alert and the Needs-you list behave the same

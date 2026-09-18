@@ -36,6 +36,26 @@ enum SessionAlertHook {
         return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/settings.json")
     }
 
+    /// Every harness whose settings file gets the hook, with the splice that
+    /// belongs to it.
+    ///
+    /// BOTH are installed regardless of which backend drives the app: a live
+    /// task's session belongs to whichever harness started it, so alerting only
+    /// for the selected backend would go quiet exactly when you switched. The
+    /// praxis file is only written when its directory already exists — creating
+    /// `~/.praxis/agent` on a machine with no praxis install would be flow-bar
+    /// inventing another tool's config.
+    static var targets: [(name: String, url: URL, splice: HookSplice)] {
+        var out: [(String, URL, HookSplice)] = [
+            ("claude", settingsURL, ClaudeHookConfig.splice),
+        ]
+        let praxis = PraxisHookConfig.settingsURL()
+        if FileManager.default.fileExists(atPath: praxis.deletingLastPathComponent().path) {
+            out.append(("praxis", praxis, PraxisHookConfig.splice))
+        }
+        return out
+    }
+
     /// The hook body.
     ///
     /// `mktemp` + `mv` rather than writing the final name directly: flow-bar is
@@ -71,23 +91,40 @@ enum SessionAlertHook {
             CLI.log("session-alert hook: could not write script — \(error)")
             return false
         }
-        return updateSettings { ClaudeHookConfig.install(into: $0, scriptPath: scriptURL.path) }
+        // Every target is attempted even if one fails: a malformed Claude
+        // settings file must not cost you praxis alerts, or the reverse.
+        var ok = false
+        for target in targets {
+            let wrote = updateSettings(at: target.url) {
+                target.splice.install(into: $0, scriptPath: scriptURL.path)
+            }
+            if wrote { ok = true }
+        }
+        return ok
     }
 
     @discardableResult
     static func remove() -> Bool {
-        updateSettings { ClaudeHookConfig.remove(from: $0) }
+        var ok = false
+        for target in targets {
+            if updateSettings(at: target.url, { target.splice.remove(from: $0) }) { ok = true }
+        }
+        return ok
     }
 
+    /// Installed anywhere it could be. Reported per harness rather than as a
+    /// single bool would be more precise, but the toggle it backs is one switch.
     static var isInstalled: Bool {
-        guard let settings = readSettings() else { return false }
-        return ClaudeHookConfig.isInstalled(in: settings)
-            && FileManager.default.isExecutableFile(atPath: scriptURL.path)
+        guard FileManager.default.isExecutableFile(atPath: scriptURL.path) else { return false }
+        return targets.contains { target in
+            guard let settings = readSettings(at: target.url) else { return false }
+            return target.splice.isInstalled(in: settings)
+        }
     }
 
     // MARK: settings.json
 
-    private static func readSettings() -> [String: Any]? {
+    private static func readSettings(at settingsURL: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: settingsURL) else { return [:] }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             // Present but unparseable. Refuse to touch it rather than replace
@@ -99,8 +136,10 @@ enum SessionAlertHook {
 
     /// Read, transform, write back — preserving key order as best JSON allows
     /// and backing up the original once.
-    private static func updateSettings(_ transform: ([String: Any]) -> [String: Any]) -> Bool {
-        guard let current = readSettings() else {
+    private static func updateSettings(at settingsURL: URL,
+                                       _ transform: ([String: Any]) -> [String: Any]) -> Bool
+    {
+        guard let current = readSettings(at: settingsURL) else {
             CLI.log("session-alert hook: \(settingsURL.path) is not valid JSON — leaving it alone")
             return false
         }

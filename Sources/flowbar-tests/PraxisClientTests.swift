@@ -353,6 +353,85 @@ func runPraxisClientTests() {
         T.equal(Backend.active().kind, .praxis, "factory follows the setting")
     }
 
+    T.test("praxis hook installs with NO matcher, surgically") {
+        let splice = PraxisHookConfig.splice
+        T.expect(splice.matcher == nil,
+                 "praxis matches a matcher against the event's reason - Claude's "
+                 + "notification_type pattern would match nothing and never fire")
+        T.equal(splice.event, "Notification", "the alias praxis maps to attention_needed")
+
+        // A settings file someone else already owns, including their own hook
+        // on the same event.
+        let existing: [String: Any] = [
+            "model": "opus",
+            "hooks": [
+                "Notification": [["matcher": "theirs",
+                                  "hooks": [["type": "command", "command": "/theirs.sh"]]]],
+                "PreToolUse": [["hooks": [["type": "command", "command": "/other.sh"]]]],
+            ],
+        ]
+        let installed = splice.install(into: existing, scriptPath: "/tmp/alert.sh")
+        T.equal(installed["model"] as? String, "opus", "unknown keys survive")
+        let entries = splice.entries(in: installed)
+        T.equal(entries.count, 2, "their entry is kept and ours is appended")
+        T.expect(splice.isInstalled(in: installed), "ours is found by its marker")
+
+        let ours = entries.first { splice.isOurs($0) }
+        T.expect(ours?["matcher"] == nil,
+                 "no matcher key at all - an absent matcher means every occurrence")
+        let steps = ours?["hooks"] as? [[String: Any]]
+        T.expect((steps?.first?["command"] as? String)?.contains("/tmp/alert.sh") == true,
+                 "runs our script")
+        T.equal(steps?.first?["timeout"] as? Int, 5,
+                "short timeout on an observation-only event")
+
+        // Installing twice must not stack.
+        let twice = splice.install(into: installed, scriptPath: "/tmp/alert.sh")
+        T.equal(splice.entries(in: twice).filter { splice.isOurs($0) }.count, 1,
+                "a second install replaces ours rather than duplicating it")
+
+        // Removal takes ours and nothing else.
+        let removed = splice.remove(from: twice)
+        T.expect(!splice.isInstalled(in: removed), "ours is gone")
+        T.equal(splice.entries(in: removed).count, 1, "theirs remains")
+        T.expect((removed["hooks"] as? [String: Any])?["PreToolUse"] != nil,
+                 "an unrelated event is untouched")
+
+        // And when ours was the only entry, the keys are pruned rather than
+        // left as empty husks.
+        let solo = splice.install(into: [:], scriptPath: "/tmp/alert.sh")
+        T.expect(splice.remove(from: solo)["hooks"] == nil,
+                 "the hooks key is pruned when nothing is left")
+    }
+
+    T.test("a praxis attention payload decodes to the same vocabulary as Claude's") {
+        let now = Date()
+        // Real shape: praxis sends event/cwd/hook_event_name/session_id plus
+        // the attention detail (reason, tool, question).
+        let question = "{\"event\":\"attention_needed\",\"hook_event_name\":\"Notification\","
+            + "\"session_id\":\"01a0a970-a677-7c25-aa11-35b2163b7b39\",\"cwd\":\"/tmp\","
+            + "\"reason\":\"waiting_question\",\"tool\":\"ask\",\"question\":\"Ship it or wait?\"}"
+        let asked = SessionAlert.decode(Data(question.utf8), at: now)
+        T.equal(asked?.kind, "waiting_question", "praxis reason becomes the kind")
+        T.equal(asked?.label, "Ship it or wait?",
+                "the question itself is the label, better than any generic string")
+
+        let permission = "{\"session_id\":\"01a0a970-a677-7c25-aa11-35b2163b7b39\","
+            + "\"reason\":\"waiting_permission\",\"tool\":\"Bash\"}"
+        T.equal(SessionAlert.decode(Data(permission.utf8), at: now)?.label,
+                "Bash needs approval", "names the tool that stopped")
+
+        // Claude's own shape still wins where it is present.
+        let claude = "{\"session_id\":\"abc\",\"notification_type\":\"permission_prompt\","
+            + "\"message\":\"Bash wants to run: npm test\"}"
+        T.equal(SessionAlert.decode(Data(claude.utf8), at: now)?.label,
+                "Bash wants to run: npm test", "Claude's wording is unchanged")
+
+        let noSession = "{\"reason\":\"waiting_question\"}"
+        T.expect(SessionAlert.decode(Data(noSession.utf8), at: now) == nil,
+                 "no session id means nothing to attribute, so nothing is raised")
+    }
+
     T.test("the praxis backend is gated off until the experiment flag is set") {
         let defaults = UserDefaults.standard
         let previousFlag = defaults.object(forKey: praxisBackendFlagKey)
