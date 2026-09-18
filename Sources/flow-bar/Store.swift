@@ -29,7 +29,6 @@ final class Store: ObservableObject {
     // flow's token/time estimates).
     @Published var stats: FlowStats?
 
-    private let client = FlowClient()
     private var activeRefreshTask: Task<Void, Never>?
 
     /// Menubar icon style preference, persisted across launches.
@@ -101,13 +100,13 @@ final class Store: ObservableObject {
                 if launchAtLogin { try SMAppService.mainApp.register() }
                 else { try SMAppService.mainApp.unregister() }
                 launchAtLoginError = nil
-                FlowClient.log("launch-at-login: \(launchAtLogin ? "register" : "unregister") ok — "
+                CLI.log("launch-at-login: \(launchAtLogin ? "register" : "unregister") ok — "
                                + "status now \(Self.describe(SMAppService.mainApp.status))")
             } catch {
                 // Previously this reverted the toggle and said NOTHING, so a
                 // rejected registration looked like the switch simply refusing
                 // to move. Report it instead.
-                FlowClient.log("launch-at-login: \(launchAtLogin ? "register" : "unregister") "
+                CLI.log("launch-at-login: \(launchAtLogin ? "register" : "unregister") "
                                + "FAILED — \(error)")
                 launchAtLoginError = Self.launchAtLoginMessage(for: error)
                 suppressLaunchAtLoginSideEffect = true
@@ -130,7 +129,7 @@ final class Store: ObservableObject {
     func refreshLaunchAtLogin() {
         let status = SMAppService.mainApp.status
         let enabled = (status == .enabled)
-        FlowClient.log("launch-at-login: status=\(Self.describe(status)) "
+        CLI.log("launch-at-login: status=\(Self.describe(status)) "
                        + "bundle=\(Bundle.main.bundlePath)")
         if enabled != launchAtLogin {
             suppressLaunchAtLoginSideEffect = true
@@ -165,8 +164,78 @@ final class Store: ObservableObject {
     }
 
     /// Preferred flow terminal backend (FLOW_TERM); "" = let flow auto-detect.
+    /// In praxis mode flow-bar opens the terminal itself, and reuses this same
+    /// pick to decide which app to open.
     @Published var terminalBackend: String = UserDefaults.standard.string(forKey: "flowTerm") ?? "" {
         didSet { UserDefaults.standard.set(terminalBackend, forKey: "flowTerm") }
+    }
+
+    /// Which CLI backs the app: `flow`, or the praxis harness (`prx`).
+    ///
+    /// Switching reloads everything, for the same reason a profile switch does:
+    /// slugs are backend-scoped, so a row listed from one backend must never be
+    /// acted on against the other.
+    @Published var backendKind: BackendKind = Backend.kind {
+        didSet {
+            guard backendKind != oldValue else { return }
+            UserDefaults.standard.set(backendKind.rawValue, forKey: workBackendKey)
+            backendStatus = nil
+            reloadForSourceSwitch()
+        }
+    }
+
+    /// What the active backend can do. Panes gate on this rather than on the
+    /// backend name, so "praxis has no playbooks" is stated in one place.
+    var capabilities: BackendCapabilities { Backend.active().capabilities }
+
+    /// Whether the praxis backend is available to choose. Off unless the
+    /// experiment flag is set — see `praxisBackendFlagKey`. Read fresh rather
+    /// than cached so flipping the default and reopening Settings is enough.
+    var praxisBackendAvailable: Bool { Backend.praxisAvailable }
+
+    /// Explicit path to `prx`; empty means "find it on PATH".
+    @Published var praxisBinary: String = UserDefaults.standard.string(forKey: praxisBinaryKey) ?? "" {
+        didSet {
+            UserDefaults.standard.set(praxisBinary, forKey: praxisBinaryKey)
+            backendStatus = nil
+        }
+    }
+
+    /// Praxis agent directory (`PRAXIS_CODING_AGENT_DIR`); empty means the
+    /// harness default, `~/.praxis/agent`.
+    @Published var praxisAgentDir: String = UserDefaults.standard.string(forKey: praxisAgentDirKey) ?? "" {
+        didSet {
+            UserDefaults.standard.set(praxisAgentDir, forKey: praxisAgentDirKey)
+            backendStatus = nil
+        }
+    }
+
+    /// Result of the last backend probe, shown in Settings. Nil until asked.
+    @Published var backendStatus: String?
+    @Published var backendStatusOK = false
+    @Published var backendProbing = false
+
+    /// Ask the selected backend whether it is actually usable, and say so in a
+    /// sentence. Worth its own button because the failure it catches — a `prx`
+    /// too old to have `work` — otherwise shows up as an empty task list.
+    func probeBackend() {
+        guard !backendProbing else { return }
+        backendProbing = true
+        backendStatus = nil
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
+                do { return .success(try Backend.active().probe()) } catch { return .failure(error) }
+            }.value
+            switch result {
+            case .success(let line):
+                self.backendStatus = line
+                self.backendStatusOK = true
+            case .failure(let error):
+                self.backendStatus = "\(error)"
+                self.backendStatusOK = false
+            }
+            self.backendProbing = false
+        }
     }
 
     // FLOW_ROOT profiles (see Profiles.swift).
@@ -202,7 +271,7 @@ final class Store: ObservableObject {
     ///
     /// Lives on Store rather than in TasksView because every point that
     /// invalidates it is here: `endActiveRefresh()` (popover close) and
-    /// `reloadForProfileSwitch()` (FLOW_ROOT change — reachable from the footer
+    /// `reloadForSourceSwitch()` (FLOW_ROOT change — reachable from the footer
     /// WITHOUT closing the popover, so a view-owned set would happily fire
     /// slugs from one root against another).
     @Published var selectedTaskSlugs: Set<String> = []
@@ -360,11 +429,11 @@ final class Store: ObservableObject {
         switch BrewUpgradeRunner.consumeLastResult() {
         case .ok:
             flashResult(.success)
-            FlowClient.log("brew-upgrade: previous run succeeded (now v\(currentVersion))")
+            CLI.log("brew-upgrade: previous run succeeded (now v\(currentVersion))")
         case .failed:
             updateStatus = .failed("the last brew upgrade failed — see "
                                    + "~/Library/Logs/flow-bar-upgrade.log")
-            FlowClient.log("brew-upgrade: previous run FAILED")
+            CLI.log("brew-upgrade: previous run FAILED")
         case nil:
             break   // no upgrade has run, or its result was already reported
         }
@@ -384,9 +453,9 @@ final class Store: ObservableObject {
         taskDetailLoading = true
         Task {
             let d = try? await Task.detached(priority: .userInitiated) {
-                let client = FlowClient()
-                return kind == .playbook ? try client.playbookDetail(slug)
-                                         : try client.taskDetail(slug)
+                let backend = Backend.active()
+                return kind == .playbook ? try backend.playbookDetail(slug)
+                                         : try backend.taskDetail(slug)
             }.value
             // Ignore if the user closed the peek or opened a different one.
             guard self.peekedSlug == slug else { return }
@@ -423,8 +492,8 @@ final class Store: ObservableObject {
         isCreating = true
         Task {
             let loaded = await Task.detached(priority: .userInitiated) { () -> ([String], [Project], [String]) in
-                let c = FlowClient()
-                let slugs = ((try? c.listTasks(includeArchived: true)) ?? []).map(\.slug)
+                let c = Backend.active()
+                let slugs = ((try? c.tasks(includeArchived: true)) ?? []).map(\.slug)
                 let projects = (try? c.listProjects()) ?? []
                 let tags = ((try? c.listTags()) ?? []).map(\.tag).filter { !$0.hasPrefix("owner:") }
                 return (slugs, projects, tags)
@@ -455,7 +524,7 @@ final class Store: ObservableObject {
             do {
                 // Resolve the project slug, creating the project first if new.
                 let projectSlug: String? = try await Task.detached(priority: .userInitiated) { () -> String? in
-                    let c = FlowClient()
+                    let c = Backend.active()
                     if let np = newProject {
                         _ = try c.createProject(name: np.name, slug: np.slug, workDir: np.workDir,
                                                 priority: "medium", mkdir: np.mkdir, brief: "")
@@ -464,7 +533,7 @@ final class Store: ObservableObject {
                     return existingProject
                 }.value
                 _ = try await Task.detached(priority: .userInitiated) {
-                    try FlowClient().createTask(
+                    try Backend.active().createTask(
                         name: name, slug: slug, project: projectSlug,
                         workDir: workDir.isEmpty ? nil : workDir, priority: priority,
                         due: due.isEmpty ? nil : due, tags: tags, mkdir: mkdir, brief: brief)
@@ -486,7 +555,7 @@ final class Store: ObservableObject {
         Task {
             do {
                 let result = try await Task.detached(priority: .userInitiated) {
-                    try FlowClient().inProgressTasks()
+                    try Backend.active().inProgressTasks()
                 }.value
                 self.tasks = result
                 self.errorText = nil
@@ -520,7 +589,7 @@ final class Store: ObservableObject {
         playbookDetailLoading = true
         Task {
             let d = try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().playbookDetail(slug)
+                try Backend.active().playbookDetail(slug)
             }.value
             // Ignore a response for a playbook the user has already left.
             guard self.playbookDetailSlug == slug else { return }
@@ -551,7 +620,7 @@ final class Store: ObservableObject {
         browseTasks = []
         Task {
             let r = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(status: status)
+                try Backend.active().tasks(status: status)
             }.value) ?? []
             self.browseTasks = r
             self.browseLoading = false
@@ -565,7 +634,7 @@ final class Store: ObservableObject {
         browseTasks = []
         Task {
             let r = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(includeArchived: true)
+                try Backend.active().tasks(includeArchived: true)
             }.value) ?? []
             self.browseTasks = r.filter { $0.isArchived }
             self.browseLoading = false
@@ -577,10 +646,10 @@ final class Store: ObservableObject {
         playbooksLoading = true
         Task {
             let pbs = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listPlaybooks()
+                try Backend.active().listPlaybooks()
             }.value) ?? []
             let rns = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listRuns()
+                try Backend.active().listRuns()
             }.value) ?? []
             self.playbooks = pbs
             self.runs = rns
@@ -593,7 +662,7 @@ final class Store: ObservableObject {
         if !auto { spawningOps += 1 }   // only the new-tab path opens a terminal
         Task {
             let res = try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().runPlaybook(slug, auto: auto)
+                try Backend.active().runPlaybook(slug, auto: auto)
             }.value
             if !auto {
                 self.spawningOps -= 1
@@ -608,7 +677,7 @@ final class Store: ObservableObject {
         if !auto { spawningOps += 1 }
         Task {
             let res = try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().ownerTick(slug, auto: auto)
+                try Backend.active().ownerTick(slug, auto: auto)
             }.value
             if !auto {
                 self.spawningOps -= 1
@@ -633,20 +702,20 @@ final class Store: ObservableObject {
         tagTasks = []
         Task {
             let r = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(tag: tag, includeDone: true, includeArchived: true)
+                try Backend.active().tasks(tag: tag, includeDone: true, includeArchived: true)
             }.value) ?? []
             self.tagTasks = r
             self.tagTasksLoading = false
         }
     }
 
-    /// Load all tasks tagged `owner:<slug>` for the owner drill-in.
+    /// Load the tasks belonging to a recurring agent, for its drill-in.
     func loadOwnerTasks(_ slug: String) {
         ownerTasksLoading = true
         ownerTasks = []
         Task {
             let result = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(tag: "owner:\(slug)")
+                try Backend.active().tasksFor(owner: slug)
             }.value) ?? []
             self.ownerTasks = result
             self.ownerTasksLoading = false
@@ -658,7 +727,7 @@ final class Store: ObservableObject {
         // Safe, no-terminal mutation — no menubar loading indicator.
         Task {
             _ = try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().setOwner(slug, paused: paused)
+                try Backend.active().setOwner(slug, paused: paused)
             }.value
             self.refreshMetrics()
         }
@@ -673,7 +742,7 @@ final class Store: ObservableObject {
         projectTasks = []
         Task {
             let result = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(project: slug, includeDone: true, includeArchived: true)
+                try Backend.active().tasks(project: slug, includeDone: true, includeArchived: true)
             }.value) ?? []
             self.projectTasks = result
             self.projectTasksLoading = false
@@ -685,15 +754,15 @@ final class Store: ObservableObject {
     func refreshMetrics() {
         metricsLoading = true
         Task {
-            let c = FlowClient()
+            let c = Backend.active()
             async let ip       = Task.detached { (try? c.inProgressTasks()) ?? [] }.value
-            async let backlog  = Task.detached { (try? c.listTasks(status: "backlog").count) ?? 0 }.value
-            async let done     = Task.detached { (try? c.listTasks(status: "done").count) ?? 0 }.value
+            async let backlog  = Task.detached { (try? c.tasks(status: "backlog").count) ?? 0 }.value
+            async let done     = Task.detached { (try? c.tasks(status: "done").count) ?? 0 }.value
             async let projects = Task.detached { (try? c.listProjects()) ?? [] }.value
             async let runs     = Task.detached { (try? c.listRuns()) ?? [] }.value
             async let owners   = Task.detached { (try? c.listOwners()) ?? [] }.value
             async let tags     = Task.detached { (try? c.listTags()) ?? [] }.value
-            async let questions = Task.detached { (try? c.listTasks(tag: "question")) ?? [] }.value
+            async let questions = Task.detached { (try? c.tasks(tag: "question")) ?? [] }.value
             async let stats    = Task.detached { try? c.flowStats() }.value
 
             let m = DashboardMetrics(
@@ -734,7 +803,11 @@ final class Store: ObservableObject {
     /// - Parameter skipPermissions: nil asks the keyboard — a held ⌥ at click
     ///   time. A menu item passes the answer explicitly instead, because by the
     ///   time its action runs the modifier that opened the menu is long gone.
-    func switchTo(_ slug: String, skipPermissions: Bool? = nil) {
+    /// - Parameter destination: which of the task's sessions to land in. The
+    ///   default lets the backend choose, which is what a plain click means.
+    func switchTo(_ slug: String, skipPermissions: Bool? = nil,
+                  destination: TaskDestination = .auto)
+    {
         // Read the modifier before dismissing, while the click that got us here
         // is still the current event.
         let skip = skipPermissions ?? Self.skipPermissionsRequested()
@@ -743,7 +816,8 @@ final class Store: ObservableObject {
         Task {
             do {
                 let res = try await Task.detached(priority: .userInitiated) {
-                    try FlowClient().doTask(slug, skipPermissions: skip)
+                    try Backend.active().doTask(slug, skipPermissions: skip,
+                                                destination: destination)
                 }.value
                 self.spawningOps -= 1
                 if res.code == 0 {
@@ -790,7 +864,7 @@ final class Store: ObservableObject {
         // already exactly right, and there is nothing to aggregate).
         if batch.count == 1 { switchTo(batch[0]); return }
 
-        FlowClient.log("multi-open: opening \(batch.count) sequentially — \(batch.joined(separator: ", "))")
+        CLI.log("multi-open: opening \(batch.count) sequentially — \(batch.joined(separator: ", "))")
         selectedTaskSlugs = []
         Self.dismissPopover()
         spawningOps += batch.count   // counter, so the spinner spans the batch
@@ -820,7 +894,7 @@ final class Store: ObservableObject {
                 case .alreadyOpen:   alreadyOpen += 1
                 case .failed(let m): failures.append((slug, m))
                 }
-                FlowClient.log("multi-open: \(slug) -> \(outcome)")
+                CLI.log("multi-open: \(slug) -> \(outcome)")
                 // Settle gap, skipped after the last one so the batch doesn't
                 // end on a pointless wait. Only needed when a tab was actually
                 // spawned — switching to an already-open tab is instant.
@@ -832,7 +906,7 @@ final class Store: ObservableObject {
             // ONE flash, not N. `flashResult` cancels and restarts its reset
             // task on every call, so N calls would strobe and end on whichever
             // spawn happened to finish last.
-            FlowClient.log("multi-open: done — \(succeeded) opened, \(alreadyOpen) already open, "
+            CLI.log("multi-open: done — \(succeeded) opened, \(alreadyOpen) already open, "
                            + "\(failures.count) failed")
             if failures.isEmpty {
                 self.errorText = nil
@@ -870,7 +944,7 @@ final class Store: ObservableObject {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let res = try FlowClient().doTask(slug, skipPermissions: skipPermissions)
+                    let res = try Backend.active().doTask(slug, skipPermissions: skipPermissions)
                     if res.code == 0 { cont.resume(returning: .ok) }
                     else if isLiveSessionGuard(res.stderr) { cont.resume(returning: .alreadyOpen) }
                     else { cont.resume(returning: .failed(res.stderr)) }
@@ -980,7 +1054,7 @@ final class Store: ObservableObject {
     func loadReminderLinkTasks() {
         Task {
             let all = (try? await Task.detached(priority: .userInitiated) {
-                try FlowClient().listTasks(status: nil)   // all non-archived
+                try Backend.active().tasks(status: nil)   // all non-archived
             }.value) ?? []
             self.reminderLinkTasks = all
                 .filter { $0.status == "in-progress" || $0.status == "backlog" }

@@ -52,13 +52,13 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
     /// crash). We only hop back to the main actor to touch `onAuthDenied`.
     nonisolated func requestAuthorizationIfNeeded() {
         guard let bundleID = Bundle.main.bundleIdentifier else {
-            FlowClient.log("notifications: no bundle id — scheduler disabled (bare `swift run`?)")
+            CLI.log("notifications: no bundle id — scheduler disabled (bare `swift run`?)")
             return
         }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             let status = settings.authorizationStatus
-            FlowClient.log("notifications: bundle=\(bundleID) path=\(Bundle.main.bundlePath) "
+            CLI.log("notifications: bundle=\(bundleID) path=\(Bundle.main.bundlePath) "
                            + "status=\(Self.describe(status))")
             if status == .notDetermined {
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
@@ -67,9 +67,9 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
                     // appeared in System Settings > Notifications and there was
                     // nothing anywhere to explain it.
                     if let error {
-                        FlowClient.log("notifications: requestAuthorization FAILED — \(error)")
+                        CLI.log("notifications: requestAuthorization FAILED — \(error)")
                     } else {
-                        FlowClient.log("notifications: requestAuthorization granted=\(granted)")
+                        CLI.log("notifications: requestAuthorization granted=\(granted)")
                     }
                     Task { @MainActor in self.onAuthDenied?(!granted) }
                 }
@@ -125,12 +125,12 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
             let rid = r.id
             center.add(request) { error in
                 if let error {
-                    FlowClient.log("notifications: add failed for \(rid) — \(error)")
+                    CLI.log("notifications: add failed for \(rid) — \(error)")
                 }
             }
             scheduled += 1
         }
-        FlowClient.log("notifications: reconcile scheduled \(scheduled) of \(reminders.count) reminder(s)")
+        CLI.log("notifications: reconcile scheduled \(scheduled) of \(reminders.count) reminder(s)")
     }
 
     // MARK: - UNUserNotificationCenterDelegate (called off the main actor)

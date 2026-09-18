@@ -48,7 +48,7 @@ enum BrewUpgradeRunner {
             try body.write(to: scriptURL, atomically: true, encoding: .utf8)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
         } catch {
-            FlowClient.log("brew-upgrade: could not write script — \(error)")
+            CLI.log("brew-upgrade: could not write script — \(error)")
             return false
         }
 
@@ -56,7 +56,7 @@ enum BrewUpgradeRunner {
         // the outcome of this run.
         try? fm.removeItem(at: markerURL)
 
-        guard FlowClient.spawnDetached(scriptURL.path, logPath: logURL.path) else {
+        guard CLI.spawnDetached(scriptURL.path, logPath: logURL.path) else {
             return false
         }
 

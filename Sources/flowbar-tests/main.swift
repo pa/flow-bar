@@ -1130,7 +1130,7 @@ T.test("Codex noise carries no activity") {
 T.test("harness labels") {
     T.equal(TranscriptFormat.claude.label, "Claude", "claude")
     T.equal(TranscriptFormat.codex.label, "Codex", "codex")
-    T.equal(TranscriptFormat.allCases.count, 2, "both harnesses flow can bootstrap")
+    T.equal(TranscriptFormat.allCases.count, 3, "the two flow bootstraps, plus praxis")
 }
 
 print("\nBrewUpgrade — the self-upgrade script")
@@ -1528,5 +1528,10 @@ T.equal(FlowClient.doTaskArgs("flow-bar-attention"),
 T.equal(FlowClient.doTaskArgs("flow-bar-attention", skipPermissions: true),
         ["do", "flow-bar-attention", "--dangerously-skip-permissions"],
         "⌥-click asks flow to skip permission prompts")
+
+// The praxis backend's own logic (PraxisClientTests.swift) — a function rather
+// than top-level code, because only this file may carry top-level statements.
+runPraxisClientTests()
+runPraxisTranscriptTests()
 
 T.summarize()

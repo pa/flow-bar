@@ -41,20 +41,48 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
 
 ## Architecture
 
-- **The flow CLI is the API.** We never read `~/.flow/flow.db` directly —
-  reads go through `flow list tasks --format json`, actions through real
-  subcommands. This keeps us schema-proof and respects flow's invariants.
+- **The CLI is the API.** We never read `~/.flow/flow.db` or the praxis work
+  store's `task.md` files directly — reads go through the CLI's JSON output,
+  actions through real subcommands. This keeps us schema-proof and respects
+  each tool's invariants (both take a lock and rewrite atomically; a GUI
+  parsing their files behind their back races those writes).
+- **Two backends, one UI.** The app is driven by `flow` OR by the praxis
+  harness (`prx`), picked in Settings → "Work source". They are not
+  feature-identical, and the difference is declared — not faked — through
+  `BackendCapabilities`: a pane whose backing concept does not exist (praxis
+  has no playbooks, no `flow stats`) is HIDDEN rather than shown empty.
+- **praxis is behind a flag until it is GA** (`praxisBackendFlagKey`):
+  `defaults write cloud.facets.flow-bar experimentalPraxisBackend -bool true`.
+  The picker is hidden without it, and `Backend.kind` returns `.flow`
+  regardless of the stored selection — the FLAG wins, so clearing it is a
+  complete way back rather than leaving someone stranded on a backend they can
+  no longer see a control for. Gate new praxis-only surface on
+  `Backend.praxisAvailable`, not on the selection.
 - **`FlowBarCore`** (library): pure data/logic, no UI.
   - `Models.swift` / `EntityModels.swift` — `FlowTask`, `Project`, `Playbook`,
     `PlaybookRun`, `Owner`, `TagCount`, `DashboardMetrics`.
   - `Markdown.swift` — block-level markdown parser (headings, paragraphs,
     lists incl. ordered/nested/checkbox, fenced code, tables, blockquotes,
     rules). Pure data, no AppKit, so the harness covers it.
-  - `FlowClient.swift` — binary discovery (+ a generous PATH so GUI launches
-    find `flow`/`claude`), `Process` runner, entity reads (JSON; owners/tags
-    via text parsers), `dashboardMetrics`, `doTask`/`runPlaybook`/owner actions,
-    and `sessionInfo`/`parseSessionInfo` (a task's harness session binding plus
-    the state of any `flow do --auto` run on it).
+  - `CLI.swift` — process plumbing shared by both backends: binary discovery
+    (+ a generous PATH so GUI launches find `flow`/`prx`/`claude`), the
+    capture-and-wait runner, the TCC-disclaiming spawn, the detached spawn the
+    self-upgrade needs, and the log. It knows how to run A binary and nothing
+    about which one — env and disclaim policy are the caller's.
+  - `WorkBackend.swift` — the protocol the whole UI is written against, plus
+    `BackendKind`, `BackendCapabilities`, `SessionInfo`, and `Backend.active()`
+    (resolved from UserDefaults per call, so the toggle takes effect on the
+    next refresh instead of at relaunch).
+  - `FlowClient.swift` — the flow backend: its environment (`FLOW_ROOT`,
+    `FLOW_TERM`), entity reads (JSON; owners/tags via text parsers),
+    `doTask`/`runPlaybook`/owner actions, and `sessionInfo`/`parseSessionInfo`
+    (a task's harness session binding plus the state of any `flow do --auto`
+    run on it).
+  - `PraxisClient.swift` — the praxis backend: `prx work ... -json` for tasks,
+    projects, briefs, notes and tags; `prx schedule ... -json` for the
+    recurring agents that stand in for flow's owners; and, for "switch to a
+    task", a `.command` script opened through `/usr/bin/open` that execs
+    `prx -work <slug>` in the task's work dir.
   - `SessionTranscript.swift` — `TranscriptParser` folds Claude Code session
     JSONL into a `SessionActivity`, plus `TranscriptTime` (a hand-rolled
     ISO-8601 scanner). Pure and incremental, so the harness covers it.
@@ -120,6 +148,51 @@ suppresses is the prompt that stops a command you did not mean to run. The menu
 exists because a modifier alone is invisible, and because the flag being inert
 on live tasks means a first attempt very often lands on one and looks broken.
 
+**A praxis task has MANY sessions, and the person picks.** praxis records a
+segment per stretch a session spent on a task, so "open this task" has several
+answers (one real task here offers 23). `TaskDetail.sessions` carries them and
+the detail pane's Open button becomes a split control — `primaryAction` keeps
+the old behaviour, the menu names the rest, plus `New session…` (`.fresh`).
+Gated on `capabilities.multipleSessionsPerTask`, because flow binds ONE session
+per task and a picker there would list one thing.
+
+- **`TaskDestination` is an enum, not a `String?`.** Three cases are genuinely
+  different: `.auto` (what a plain click means), `.session(id)`, and `.fresh`.
+  The last cannot be spelled as "no id", because that is `.auto` — and a
+  session you deliberately walked away from is exactly the one the heuristic
+  would hand back. `.fresh` also skips the focus-an-existing-tab step, since
+  being sent to an old tab is the opposite of asking for a new session.
+- **The label is the session's OWN title, and the HEADER title wins.** A later
+  `title_change` is sometimes cut from mid-conversation text: measured on this
+  store, a session whose header read `CoinSwitch UAT down services debug` was
+  re-titled `: I don't have access to Slack, so`. Later is not better informed,
+  just later, so a change is used only when there is no header title.
+  `titleSource` cannot arbitrate — it was `user` for good and junk alike — and
+  `cleanTitle` strips the punctuation a severed title starts with.
+- **One entry per session, not per segment.** A session that leaves a task and
+  comes back records another segment; a real task listed the same session twice
+  under the same title, which is a choice nobody can make. Stretches are folded
+  and the entry is dated by the most recent one.
+- **Empty sessions are never offered.** Resuming one is indistinguishable from
+  starting fresh, and they are the residue of the blank-session bug (one task
+  carries three 531-byte empties atop a 508 KB session).
+- **Liveness is per SESSION here** (`sessionIsLive`), not `ttyServing`'s
+  task-level match — that also matches `-work <slug>` and would mark every
+  session of a live task as live, erasing the distinction the picker exists for.
+- Costs no extra subprocess: `prx work show` has already returned the segments,
+  each title comes from one bounded 64 KB read of that session's transcript, and
+  a single `ps` covers liveness for the whole list. Inspect it with
+  `flowbar-smoke --sessions-for <slug>`.
+
+Under praxis there is no `do` to delegate to — `prx` **is** the session, not a
+launcher — so flow-bar opens the terminal itself: it writes a `.command` script
+that cds to the task's work dir and `exec`s `prx -work <slug>`, then hands it to
+`/usr/bin/open` (optionally `-a <the terminal you picked>`). `open` is
+LaunchServices, not Apple events, so this path needs no Automation grant. `exec`
+means the tab IS the session: closing it ends the session and leaves no stray
+shell. It always opens a NEW session bound to the task rather than focusing an
+existing tab — praxis has no "focus that tab" primitive to call.
+
 ## Session alerts
 
 flow-bar watches the harness sessions behind your live tasks and turns the
@@ -142,6 +215,22 @@ row reads "flow-bar-notch - waiting on you".
   with nothing happening, and that elapsed-time transition is exactly what
   "waiting on you" means (`TranscriptParser.nextTransition`). The icon pulse is a
   second timer, and it runs only while something is actually blocked.
+- **The hook works for praxis too, with one deliberate difference.** praxis
+  accepts Claude Code's hook names and maps them onto its own lifecycle events
+  (`praxis/native_command_hooks.go`): `Notification` resolves to
+  `attention_needed`, documented as firing "at the moment the runtime starts
+  blocking on the user — a permission prompt, an ask-tool question and
+  equivalents", as an EDGE, and observation-only. So the same script and the
+  same splice (`HookSplice`) are installed into `<agentDir>/settings.json`.
+  **But the matcher is omitted there**: praxis tests a matcher against the
+  event's `reason` (`waiting_permission` / `waiting_question`), NOT against
+  Claude's `notification_type`, so carrying Claude's pattern across would match
+  nothing and the hook would never fire — and since `attention_needed` only
+  fires when the runtime is genuinely blocked, there is nothing to filter out.
+  Both files are installed regardless of the selected backend, because a live
+  task's session belongs to whichever harness started it. `SessionAlert.decode`
+  reads both vocabularies (`notification_type`/`message` and
+  `reason`/`tool`/`question`) so the UI stays on one.
 - **"Blocked" is decided by exact signals first, inference only as a residue.**
   In order:
   0. A **Claude Code `Notification` hook** (`ClaudeHookConfig`,
@@ -332,8 +421,12 @@ row reads "flow-bar-notch - waiting on you".
 - `flow owner list` and `flow list tags` are **text, not JSON** — parsed by
   `FlowClient.listOwners`/`listTags`. If their output format changes, update
   those parsers.
-- The flow binary lives at `~/.local/bin/flow`; `FlowClient.searchPATH` lists
-  the dirs we probe.
+- The flow binary lives at `~/.local/bin/flow`; `CLI.searchPATH` lists the dirs
+  we probe. `prx` is resolved the same way but **prefers its standard install
+  path explicitly** (`PraxisClient.defaultInstallPath` = `~/.local/bin/prx`)
+  before falling back to a PATH lookup: a GUI app has no shell, so that PATH is
+  one we invented, and "which binary answered?" should not depend on it. An
+  explicit **Settings → prx binary** still wins over both.
 
 ## Distribution
 
@@ -420,9 +513,10 @@ subcommands.
 ## Read-mostly philosophy
 
 The app favours rich read views + only **safe** mutations inline (owner
-pause/resume). Actions that spawn a terminal — switching to a task
-(`flow do`) and running a playbook (`flow run playbook`) — are explicit,
-user-initiated, and need the one-time Accessibility grant.
+pause/resume, schedule enable/disable). Actions that spawn a terminal —
+switching to a task (`flow do`, or the `prx -work` script) and running a
+playbook (`flow run playbook`) — are explicit, user-initiated, and need the
+one-time Accessibility grant on the flow path.
 
 ## Status
 
