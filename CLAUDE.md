@@ -204,6 +204,22 @@ row reads "flow-bar-notch - waiting on you".
   with nothing happening, and that elapsed-time transition is exactly what
   "waiting on you" means (`TranscriptParser.nextTransition`). The icon pulse is a
   second timer, and it runs only while something is actually blocked.
+- **The hook works for praxis too, with one deliberate difference.** praxis
+  accepts Claude Code's hook names and maps them onto its own lifecycle events
+  (`praxis/native_command_hooks.go`): `Notification` resolves to
+  `attention_needed`, documented as firing "at the moment the runtime starts
+  blocking on the user — a permission prompt, an ask-tool question and
+  equivalents", as an EDGE, and observation-only. So the same script and the
+  same splice (`HookSplice`) are installed into `<agentDir>/settings.json`.
+  **But the matcher is omitted there**: praxis tests a matcher against the
+  event's `reason` (`waiting_permission` / `waiting_question`), NOT against
+  Claude's `notification_type`, so carrying Claude's pattern across would match
+  nothing and the hook would never fire — and since `attention_needed` only
+  fires when the runtime is genuinely blocked, there is nothing to filter out.
+  Both files are installed regardless of the selected backend, because a live
+  task's session belongs to whichever harness started it. `SessionAlert.decode`
+  reads both vocabularies (`notification_type`/`message` and
+  `reason`/`tool`/`question`) so the UI stays on one.
 - **"Blocked" is decided by exact signals first, inference only as a residue.**
   In order:
   0. A **Claude Code `Notification` hook** (`ClaudeHookConfig`,
