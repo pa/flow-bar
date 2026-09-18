@@ -143,6 +143,23 @@ if CommandLine.arguments.contains("--concurrent-test") {
     exit(0)
 }
 
+// `--tty-for <session-id>` resolves the terminal tab a session is showing in,
+// WITHOUT focusing it — checking the resolution should not steal your window.
+if let i = CommandLine.arguments.firstIndex(of: "--tty-for"),
+   i + 1 < CommandLine.arguments.count
+{
+    let id = CommandLine.arguments[i + 1]
+    let ps = (try? CLI.run("/bin/ps", ["-axo", "pid,tty,command"], timeout: 10))
+        .flatMap { String(data: $0.stdout, encoding: .utf8) } ?? ""
+    let byArgv = PraxisClient.ttyServing(slug: "", session: id, psOutput: ps)
+    let byOwner = PraxisClient.ttyFromOwnerRecord(sessionID: id, psOutput: ps)
+    print("session:      \(id)")
+    print("tty by argv:  \(byArgv ?? "(not in any command line)")")
+    print("tty by owner: \(byOwner ?? "(no live owner with a terminal)")")
+    print("would focus:  \(byArgv ?? byOwner ?? "(nothing — a new tab would open)")")
+    exit(0)
+}
+
 // `--resume-for <slug>` answers "what will clicking this task actually open?"
 // against the real store, without opening a terminal to find out.
 if let i = CommandLine.arguments.firstIndex(of: "--resume-for"),

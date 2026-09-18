@@ -48,6 +48,15 @@ the GitHub release notes when a version is tagged.
 
 ### Changed
 
+- **Opening a task under praxis goes to the tab it is already in**, the way
+  `flow do` does, instead of opening a second tab onto the same session. The
+  running session is found in `ps` by the id its own process carries, its
+  controlling tty identifies the tab, and AppleScript selects it; a session
+  started by hand — which carries nothing in argv — is found through the
+  harness's ownership record instead, with the pid checked against `ps` so a
+  recycled one cannot focus a stranger's window. Only iTerm2 and Terminal
+  expose a tty per tab, so the other picks open a new tab rather than a wrong
+  one, and the first focus asks for Automation permission.
 - **Opening a task under praxis resumes its session** instead of starting a
   blank one: flow-bar moves to the task's work directory and reopens the most
   recent session that actually has a conversation in it (`prx -resume`). A task

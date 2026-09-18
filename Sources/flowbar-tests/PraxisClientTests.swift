@@ -150,6 +150,98 @@ func runPraxisClientTests() {
                  "a bad id is rejected before it becomes a path")
     }
 
+    T.test("an already-open tab is found by tty, so a task is not opened twice") {
+        // Real shapes, taken from `ps -axo pid,tty,command` on this machine:
+        // headless sdk runs have no controlling terminal, a tab does.
+        let ps = """
+          PID TTY      COMMAND
+        10824 ??       /Users/me/.local/bin/prx sdk -prompt Post the Phase-1 UAT health
+        25566 ??       /Users/me/.local/bin/prx sdk -permission-mode auto -max-turns 50
+        39147 ttys008  /Users/me/.local/bin/prx -resume 01a0a970-a677-7c25-aa11-35b2163b7b39
+        41002 ttys011  /Users/me/.local/bin/prx -work some-other-task
+        """
+
+        T.equal(PraxisClient.ttyServing(slug: "pi42",
+                                        session: "01a0a970-a677-7c25-aa11-35b2163b7b39",
+                                        psOutput: ps),
+                "/dev/ttys008", "matched by session id, tty made absolute")
+        T.equal(PraxisClient.ttyServing(slug: "some-other-task", session: nil, psOutput: ps),
+                "/dev/ttys011", "a tab opened before the session existed matches on -work")
+        T.expect(PraxisClient.ttyServing(slug: "never-opened", session: "01a0dead", psOutput: ps) == nil,
+                 "no tab -> nil, and the caller opens one")
+
+        // The bug this guard prevents: an sdk run has no tab, so focusing its
+        // "tty" would either fail or select something unrelated.
+        let sdkOnly = """
+          PID TTY      COMMAND
+        25566 ??       /Users/me/.local/bin/prx sdk -resume 01a0beef-0000-0000-0000-000000000000
+        """
+        T.expect(PraxisClient.ttyServing(slug: "x", session: "01a0beef-0000-0000-0000-000000000000",
+                                         psOutput: sdkOnly) == nil,
+                 "a session with no controlling terminal is never treated as a tab")
+    }
+
+    T.test("owner record finds a hand-started tab, and refuses a recycled pid") {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("flowbar-owner-\(UUID().uuidString)")
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: praxisAgentDirKey)
+        defaults.set(root.path, forKey: praxisAgentDirKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: praxisAgentDirKey) }
+            else { defaults.removeObject(forKey: praxisAgentDirKey) }
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let id = "01a0afeb-bda6-7c25-aa11-35b2163b7b39"
+        let dir = root.appendingPathComponent("sessions/.owner", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Shape copied from a real record.
+        let record = "{\"sessionId\":\"" + id + "\",\"pid\":64482,\"host\":\"mac\"}"
+        try record.write(to: dir.appendingPathComponent(id + ".json"),
+                         atomically: true, encoding: .utf8)
+
+        let ps = """
+          PID TTY      COMMAND
+        64482 ttys000  /Users/me/.local/bin/prx
+        """
+        T.equal(PraxisClient.ttyFromOwnerRecord(sessionID: id, psOutput: ps), "/dev/ttys000",
+                "a hand-started session carries nothing in argv but its owner record names it")
+
+        // Same pid, now belonging to something else: the record outlived its
+        // process and the pid came back around.
+        let recycled = """
+          PID TTY      COMMAND
+        64482 ttys000  /usr/bin/vim notes.txt
+        """
+        T.expect(PraxisClient.ttyFromOwnerRecord(sessionID: id, psOutput: recycled) == nil,
+                 "a recycled pid must not focus a stranger's tab")
+
+        let headless = """
+          PID TTY      COMMAND
+        64482 ??       /Users/me/.local/bin/prx sdk -prompt x
+        """
+        T.expect(PraxisClient.ttyFromOwnerRecord(sessionID: id, psOutput: headless) == nil,
+                 "an sdk owner has no tab to focus")
+        T.expect(PraxisClient.ttyFromOwnerRecord(sessionID: "../escape", psOutput: ps) == nil,
+                 "a bad id never becomes a path")
+    }
+
+    T.test("focus scripts exist only for terminals that expose a tty") {
+        let iterm = PraxisClient.focusScript(app: "iTerm")
+        T.expect(iterm?.contains("tty of s is \"%TTY%\"") == true,
+                 "iTerm matches the session's tty")
+        T.expect(iterm?.contains("return \"miss\"") == true,
+                 "reports a miss rather than relying on osascript's exit code")
+        let terminal = PraxisClient.focusScript(app: "Terminal")
+        T.expect(terminal?.contains("tty of t is \"%TTY%\"") == true,
+                 "Terminal matches the tab's tty — it has no nested sessions")
+        T.expect(PraxisClient.focusScript(app: "Warp") == nil,
+                 "a terminal with no scriptable tty gets a new tab, never a wrong one")
+        T.equal(PraxisClient.appleScriptEscape("/dev/tty\"s0\\8"), "/dev/tty\\\"s0\\\\8",
+                "quotes and backslashes cannot break out of the script string")
+    }
+
     T.test("launch script resumes when there is a session, binds when there is not") {
         let defaults = UserDefaults.standard
         let previous = defaults.string(forKey: praxisBinaryKey)
