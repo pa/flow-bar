@@ -65,7 +65,7 @@ struct OwnersView: View {
             statusDot(o.status)
             VStack(alignment: .leading, spacing: 2) {
                 Text(o.slug).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                Text("\(o.status) · every \(o.every)").font(.system(size: 13)).foregroundStyle(.secondary)
+                Text("\(o.status) · \(o.cadenceLabel)").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
             if let rel = o.nextTickRelative {
@@ -90,14 +90,25 @@ struct OwnersView: View {
                     }
                 }.buttonStyle(.plain)
                 Spacer()
-                Menu {
-                    Button("Tick now (new tab)") { store.ownerTick(o.slug) }
-                    Button("Tick in background (--auto)") { store.ownerTick(o.slug, auto: true) }
-                } label: {
-                    Label("Tick", systemImage: "bolt.fill").font(.system(size: 13))
+                if store.capabilities.recurringHasForegroundRun {
+                    Menu {
+                        Button("Tick now (new tab)") { store.ownerTick(o.slug) }
+                        Button("Tick in background (--auto)") { store.ownerTick(o.slug, auto: true) }
+                    } label: {
+                        Label("Tick", systemImage: "bolt.fill").font(.system(size: 13))
+                    }
+                    .menuStyle(.borderlessButton).controlSize(.small).fixedSize()
+                    .help("Wake this \(store.capabilities.recurringNoun) now")
+                } else {
+                    // A praxis schedule run is always a detached session — there
+                    // is no foreground variant, so offering the choice would be
+                    // two buttons that do the same thing.
+                    Button { store.ownerTick(o.slug, auto: true) } label: {
+                        Label("Run now", systemImage: "bolt.fill").font(.system(size: 13))
+                    }
+                    .controlSize(.small)
+                    .help("Run this \(store.capabilities.recurringNoun) now, as a detached session")
                 }
-                .menuStyle(.borderlessButton).controlSize(.small).fixedSize()
-                .help("Wake this owner now")
                 Button {
                     store.setOwnerPaused(o.slug, paused: o.status == "active")
                     selected = nil

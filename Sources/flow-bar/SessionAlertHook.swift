@@ -68,7 +68,7 @@ enum SessionAlertHook {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
         } catch {
-            FlowClient.log("session-alert hook: could not write script — \(error)")
+            CLI.log("session-alert hook: could not write script — \(error)")
             return false
         }
         return updateSettings { ClaudeHookConfig.install(into: $0, scriptPath: scriptURL.path) }
@@ -101,7 +101,7 @@ enum SessionAlertHook {
     /// and backing up the original once.
     private static func updateSettings(_ transform: ([String: Any]) -> [String: Any]) -> Bool {
         guard let current = readSettings() else {
-            FlowClient.log("session-alert hook: \(settingsURL.path) is not valid JSON — leaving it alone")
+            CLI.log("session-alert hook: \(settingsURL.path) is not valid JSON — leaving it alone")
             return false
         }
         let updated = transform(current)
@@ -123,10 +123,10 @@ enum SessionAlertHook {
             try fm.createDirectory(at: settingsURL.deletingLastPathComponent(),
                                    withIntermediateDirectories: true)
             try data.write(to: settingsURL, options: .atomic)
-            FlowClient.log("session-alert hook: updated \(settingsURL.path)")
+            CLI.log("session-alert hook: updated \(settingsURL.path)")
             return true
         } catch {
-            FlowClient.log("session-alert hook: could not write settings — \(error)")
+            CLI.log("session-alert hook: could not write settings — \(error)")
             return false
         }
     }

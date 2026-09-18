@@ -76,14 +76,35 @@ if CommandLine.arguments.contains("--detach-test") {
     printf 'survived parent exit' > \(BrewUpgrade.shellQuote(marker))
     """.write(toFile: script, atomically: true, encoding: .utf8)
     try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
-    let ok = FlowClient.spawnDetached(script, logPath: dir + "/child.log")
+    let ok = CLI.spawnDetached(script, logPath: dir + "/child.log")
     print("spawned=\(ok)")
     print("marker=\(marker)")
     print("parent exiting now; check the marker in ~4s")
     exit(ok ? 0 : 1)
 }
 
-let client = FlowClient()
+// Which CLI to exercise. Defaults to whatever the app is set to, so a bare run
+// reproduces what the user sees; `--backend praxis` and `--prx <path>` are how a
+// prx build gets exercised before it is the installed one.
+let args = CommandLine.arguments
+if let i = args.firstIndex(of: "--prx"), i + 1 < args.count {
+    UserDefaults.standard.set(args[i + 1], forKey: praxisBinaryKey)
+}
+if let i = args.firstIndex(of: "--agent-dir"), i + 1 < args.count {
+    UserDefaults.standard.set(args[i + 1], forKey: praxisAgentDirKey)
+}
+if let i = args.firstIndex(of: "--backend"), i + 1 < args.count {
+    UserDefaults.standard.set(args[i + 1], forKey: workBackendKey)
+}
+
+let client = Backend.active()
+print("Backend: \(client.kind.label)")
+do {
+    print("  \(try client.probe())\n")
+} catch {
+    FileHandle.standardError.write(Data("  UNUSABLE: \(error)\n".utf8))
+    exit(1)
+}
 
 do {
     let tasks = try client.inProgressTasks()
@@ -116,12 +137,12 @@ do {
     // absent from the default list), headless --auto runs dropped.
     let tasks = try client.inProgressTasksIncludingRuns().filter(\.isLive)
     if tasks.isEmpty {
-        print("  (no live sessions — start one with `flow do <slug>` to exercise this)")
+        print("  (no live sessions — open a task from flow-bar to exercise this)")
     }
     for t in tasks {
         let info = try client.sessionInfo(t.slug)
         guard let sessionID = info.sessionID else {
-            print("  \(t.slug): live, but flow reports no session_id  ← unexpected")
+            print("  \(t.slug): live, but \(client.kind.label) reports no session id  ← unexpected")
             continue
         }
         if info.autoRunning {
@@ -130,7 +151,7 @@ do {
         }
         guard let located = SessionLocator.locate(sessionID: sessionID) else {
             print("  \(t.slug): session \(sessionID.prefix(8)) has no transcript "
-                  + "under ~/.claude/projects or ~/.codex/sessions")
+                  + "under any known harness root")
             continue
         }
         let tail = TranscriptTail(url: located.url)

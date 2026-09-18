@@ -113,7 +113,15 @@ public enum SessionActivity: Equatable, Sendable {
     /// transcript, `AskUserQuestion` sat unanswered for 62 minutes while every
     /// `Bash` call in the same session finished in a median of 0.1s — the two
     /// populations do not overlap, so guessing between them was never necessary.
-    public static let blockingTools: Set<String> = ["AskUserQuestion", "ExitPlanMode"]
+    ///
+    /// `ask` is praxis's spelling of the same thing, and the same measurement
+    /// holds there: across 150 real praxis transcripts 24% of `ask` calls
+    /// outlived 30 seconds and 16% outlived two minutes (longest: 13 hours),
+    /// against 2% and 0.8% of ten thousand `bash` calls. One shared set rather
+    /// than one per format, because a name this specific colliding with an
+    /// unrelated tool costs a single early badge, while keeping three
+    /// near-identical sets in step costs more than that forever.
+    public static let blockingTools: Set<String> = ["AskUserQuestion", "ExitPlanMode", "ask"]
 
     /// Tuning constants for turning the tool_use/tool_result gap into a state.
     public struct Thresholds: Equatable, Sendable {
@@ -182,6 +190,7 @@ public enum SessionActivity: Equatable, Sendable {
         case .waitingOnYou(let tool, _):
             switch tool {
             case "AskUserQuestion": return "asking you"
+            case "ask":             return "asking you"   // praxis's AskUserQuestion
             case "ExitPlanMode":    return "plan approval"
             case "approval":        return "approval needed"
             default:                return "needs approval"
@@ -194,17 +203,20 @@ public enum SessionActivity: Equatable, Sendable {
     }
 }
 
-/// Which harness wrote a transcript. flow can bootstrap a task under either
-/// (`flow do --harness claude|codex`), and the two write entirely different
-/// JSONL, so every transcript carries its format.
+/// Which harness wrote a transcript. flow can bootstrap a task under either of
+/// the first two (`flow do --harness claude|codex`), and the praxis backend
+/// drives the third; all three write entirely different JSONL, so every
+/// transcript carries its format.
 public enum TranscriptFormat: String, Equatable, Sendable, CaseIterable {
     case claude
     case codex
+    case praxis
 
     public var label: String {
         switch self {
         case .claude: return "Claude"
         case .codex:  return "Codex"
+        case .praxis: return "Praxis"
         }
     }
 }
@@ -296,12 +308,24 @@ public struct TranscriptParser: Sendable {
     /// Fold one already-decoded JSONL object into the state. Split out so the
     /// harness can build objects directly instead of hand-writing JSON.
     public mutating func consume(object obj: [String: Any]) {
-        // The two formats are structurally disjoint: Claude Code puts the
-        // substance in `message`, Codex wraps everything in `payload`. Sniffing
-        // per line rather than per file means a caller never has to declare the
-        // format, and a file that somehow mixes them still parses.
+        // The three formats are structurally disjoint, so they can be told apart
+        // one line at a time. Codex wraps everything in `payload`. The other two
+        // both put the substance in `message`, but they disagree about what the
+        // top-level `type` names: Claude Code names the *speaker* (`assistant`,
+        // `user`), praxis names the *record* (`session` for its header,
+        // `message` for a turn, plus bookkeeping kinds like `todo_update`). So
+        // the two names praxis uses for substance are precisely the two Claude
+        // Code never emits, and that is the whole discriminator.
+        //
+        // Sniffing per line rather than per file means a caller never has to
+        // declare the format, and a file that somehow mixes them still parses.
+        // Praxis's bookkeeping lines fall through to the Claude branch on
+        // purpose: its unknown-type guard skips them, which is the same "no new
+        // information" outcome without a second list to keep in step.
         if obj["payload"] is [String: Any] {
             consumeCodex(obj)
+        } else if let type = obj["type"] as? String, type == "session" || type == "message" {
+            consumePraxis(obj, type: type)
         } else {
             consumeClaude(obj)
         }
@@ -448,6 +472,113 @@ public struct TranscriptParser: Sendable {
         default:
             // token_count, reasoning, web_search, patch_apply_end, developer
             // `message` records — no bearing on whether the session needs you.
+            return
+        }
+        if at != nil { lastEventAt = at }
+    }
+
+    /// Praxis stop reasons that mean the turn is over and the ball is back in
+    /// the human's court.
+    ///
+    /// `aborted` (the user interrupted) and `error` (the turn blew up) matter as
+    /// much as the clean `stop`, because both are written with `content` absent
+    /// entirely — a line with nothing in it that nonetheless says "your move".
+    /// Reading only the blocks, as the Claude path must, would drop them and
+    /// leave an interrupted session reading as busy forever.
+    private static let praxisTurnEndingStopReasons: Set<String> = ["stop", "aborted", "error"]
+
+    /// Fold one praxis session line.
+    ///
+    /// Praxis splits what the other two conflate. Tool results carry their own
+    /// `toolResult` role rather than arriving as user entries full of
+    /// `tool_result` blocks, so "did the human actually type something" needs no
+    /// disambiguation here. And like Codex — but unlike Claude Code — it states
+    /// outright when a turn has ended, via `stopReason`; that is used in
+    /// preference to inference.
+    ///
+    /// What it does *not* record is permission state: there is no approval-mode
+    /// field and no approval-request line anywhere in the format (checked
+    /// against every key of 43k real lines). So `permissionMode` stays nil,
+    /// `mayPrompt` stays true, and a praxis session falls back to the same
+    /// elapsed-time debounce Claude Code needs. `ask` — praxis's blocking
+    /// question tool — is the one case that needs no guessing at all.
+    private mutating func consumePraxis(_ obj: [String: Any], type: String) {
+        // The header is the only line in the file carrying the launch directory,
+        // so it is read for provenance and nothing else. Stamping `lastEventAt`
+        // from it would make a transcript with no turns in it yet look like
+        // activity, and a session that has only been opened is honestly
+        // `.unknown`.
+        if type == "session" {
+            if let c = obj["cwd"] as? String, !c.isEmpty { cwd = c }
+            return
+        }
+
+        let at = (obj["timestamp"] as? String).flatMap(TranscriptTime.parse)
+        guard let message = obj["message"] as? [String: Any],
+              let role = message["role"] as? String else { return }
+
+        switch role {
+        case "assistant":
+            // Absent on an aborted or errored turn — deliberately NOT guarded
+            // against being empty, see `praxisTurnEndingStopReasons`.
+            let blocks = (message["content"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+            var sawTool = false
+            var sawText = false
+            for b in blocks {
+                switch b["type"] as? String {
+                case "toolCall":
+                    guard let id = b["id"] as? String else { continue }
+                    sawTool = true
+                    let name = (b["name"] as? String) ?? "tool"
+                    // An unaged call is dropped rather than anchored to `now`,
+                    // for the same reason as the Claude path.
+                    if let at { pending.append(PendingTool(id: id, name: name, startedAt: at)) }
+                case "text", "thinking":
+                    sawText = true
+                default:
+                    break
+                }
+            }
+            let stop = (message["stopReason"] as? String) ?? ""
+            if sawTool {
+                // A turn that ends in tool calls is not "your move" — the
+                // outstanding-tool branch of `activity` owns the state now.
+                lastEntry = nil
+            } else if Self.praxisTurnEndingStopReasons.contains(stop) {
+                // An explicit end of turn. Anything still outstanding is moot —
+                // exactly the ambiguity the Claude path has to debounce.
+                pending.removeAll()
+                lastEntry = .assistantText
+            } else if sawText {
+                lastEntry = .assistantText
+            } else {
+                return   // understood nothing, so do not move the clock either
+            }
+
+        case "toolResult":
+            // Closed by id. Praxis also reports a `toolOutcome` (success /
+            // failed / repaired / refused), but every one of them means the same
+            // thing here: the wait is over. `refused` is a *denied* permission
+            // arriving as an ordinary result, which is why a denial in praxis
+            // never leaves a call hanging the way a Claude prompt can.
+            guard let id = message["toolCallId"] as? String else { return }
+            pending.removeAll { $0.id == id }
+            lastEntry = .toolResult
+
+        case "user":
+            // `customType` marks a turn praxis injected itself — peer
+            // deliveries, workspace moves, doctor repairs. This is praxis's
+            // `isMeta`: a turn will run, but no human typed it, so it must not
+            // read as a new prompt.
+            let injected = !((message["customType"] as? String) ?? "").isEmpty
+            let typedText = !((message["text"] as? String) ?? "").isEmpty
+            let typedBlocks = !((message["content"] as? [Any]) ?? []).isEmpty
+            guard typedText || typedBlocks else { return }
+            if !injected { lastEntry = .userPrompt }
+
+        default:
+            // `custom` (the reminder blocks praxis wraps every turn in) and
+            // `compactionSummary` are machinery, not activity.
             return
         }
         if at != nil { lastEventAt = at }

@@ -270,7 +270,7 @@ final class SessionMonitor: ObservableObject {
         guard !fresh.isEmpty else { return }
         for (sessionID, alert) in fresh { alerts[sessionID] = alert }
         if Self.verbose {
-            FlowClient.log("sessions: ingested \(fresh.count) alert(s) — "
+            CLI.log("sessions: ingested \(fresh.count) alert(s) — "
                            + fresh.values.map { "\($0.kind)" }.joined(separator: ", "))
         }
         recompute()
@@ -349,7 +349,7 @@ final class SessionMonitor: ObservableObject {
     /// scan. Runs off the main actor.
     nonisolated private static func resolveOffThread() -> ResolveResult {
         var result = ResolveResult()
-        let client = FlowClient()
+        let client = Backend.active()
 
         let tasks: [FlowTask]
         do {
@@ -472,7 +472,7 @@ final class SessionMonitor: ObservableObject {
         // Icon budget: hard blocks only. See `blockedRows`.
         attentionCount = boundOut.filter { SessionAttention.isBlocked($0.activity) }.count
         if Self.verbose {
-            FlowClient.log("sessions: recompute \(boundOut.map { "\($0.id):\($0.activity.label)" }) "
+            CLI.log("sessions: recompute \(boundOut.map { "\($0.id):\($0.activity.label)" }) "
                            + "blocked=\(attentionCount) watches=\(transcriptWatches.count)")
         }
 

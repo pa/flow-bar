@@ -136,7 +136,13 @@ struct TaskRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(task.slug)
+                        // Title is the name, not the slug. Monitor-created
+                        // tasks carry a machine slug (`slack-<channel>-<ts>`)
+                        // that reads as noise in a list; the name is the
+                        // human-facing summary. Slug still identifies the task
+                        // in the detail view, where it's needed for commands.
+                        // Fall back to the slug when a task has no name.
+                        Text(task.name.isEmpty ? task.slug : task.name)
                             .font(.system(size: 15, weight: .semibold))
                             .lineLimit(1)
                         if task.isLive {

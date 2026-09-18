@@ -1130,7 +1130,7 @@ T.test("Codex noise carries no activity") {
 T.test("harness labels") {
     T.equal(TranscriptFormat.claude.label, "Claude", "claude")
     T.equal(TranscriptFormat.codex.label, "Codex", "codex")
-    T.equal(TranscriptFormat.allCases.count, 2, "both harnesses flow can bootstrap")
+    T.equal(TranscriptFormat.allCases.count, 3, "the two flow bootstraps, plus praxis")
 }
 
 print("\nBrewUpgrade — the self-upgrade script")
@@ -2230,5 +2230,10 @@ do {
     let quiet = PaletteIndex.build(tasks: [task("x", status: "backlog")]).search("")
     T.equal(quiet.sections.map { $0.title }, ["Commands"], "an idle home still offers the commands")
 }
+
+// The praxis backend's own logic (PraxisClientTests.swift) — a function rather
+// than top-level code, because only this file may carry top-level statements.
+runPraxisClientTests()
+runPraxisTranscriptTests()
 
 T.summarize()
