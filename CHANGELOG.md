@@ -61,6 +61,10 @@ the GitHub release notes when a version is tagged.
 
 ### Changed
 
+- **`prx` is found at `~/.local/bin/prx` without being configured.** That is
+  where the harness installs itself, so the common case now needs no path in
+  Settings at all; a PATH lookup remains the fallback, and an explicit **prx
+  binary** still overrides both.
 - **Opening a task under praxis goes to the tab it is already in**, the way
   `flow do` does, instead of opening a second tab onto the same session. The
   running session is found in `ps` by the id its own process carries, its

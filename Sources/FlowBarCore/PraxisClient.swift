@@ -21,11 +21,27 @@ public struct PraxisClient: Sendable, WorkBackend {
 
     // MARK: Environment
 
-    /// The binary to run: the user's explicit path, else `prx` on PATH.
-    public static func binary() -> String {
+    /// Where prx installs itself, and so where flow-bar looks first.
+    public static let defaultInstallPath = NSHomeDirectory() + "/.local/bin/prx"
+
+    /// The binary to run: the user's explicit path, else the standard install
+    /// location, else `prx` from PATH.
+    ///
+    /// Naming the conventional path rather than relying on PATH alone is worth
+    /// the extra `stat`: a GUI app has no shell, so the PATH it searches is one
+    /// the app made up (`CLI.searchPATH`), and "which prx did it pick?" becomes
+    /// a question nobody can answer from outside. Falling back to the bare name
+    /// still covers an install somewhere else on that list.
+    ///
+    /// Parameters exist for the tests; every caller uses the defaults.
+    public static func binary(defaultPath: String = defaultInstallPath,
+                             fileManager: FileManager = .default) -> String
+    {
         let explicit = (UserDefaults.standard.string(forKey: praxisBinaryKey) ?? "")
             .trimmingCharacters(in: .whitespaces)
-        return explicit.isEmpty ? BackendKind.praxis.binaryName : explicit
+        if !explicit.isEmpty { return explicit }
+        if fileManager.isExecutableFile(atPath: defaultPath) { return defaultPath }
+        return BackendKind.praxis.binaryName
     }
 
     /// The agent directory (praxis's profile root), or nil to let prx use its

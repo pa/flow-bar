@@ -353,6 +353,36 @@ func runPraxisClientTests() {
         T.equal(Backend.active().kind, .praxis, "factory follows the setting")
     }
 
+    T.test("prx resolves to the standard install path by default") {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: praxisBinaryKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: praxisBinaryKey) }
+            else { defaults.removeObject(forKey: praxisBinaryKey) }
+        }
+        defaults.removeObject(forKey: praxisBinaryKey)
+
+        T.equal(PraxisClient.defaultInstallPath, NSHomeDirectory() + "/.local/bin/prx",
+                "where prx installs itself")
+        // Present: take it by name, so which binary answered is knowable from
+        // outside instead of depending on the PATH the app invented.
+        T.equal(PraxisClient.binary(defaultPath: "/bin/echo"), "/bin/echo",
+                "an installed prx at the standard path wins")
+        // Absent: fall back to the bare name, which CLI.resolve looks up on the
+        // app's search PATH — an install somewhere else still works.
+        T.equal(PraxisClient.binary(defaultPath: "/nope/prx"), "prx",
+                "no install there falls back to a PATH lookup")
+
+        // An explicit setting always wins, including over a perfectly good
+        // install — that is the whole point of the field.
+        defaults.set("/usr/bin/true", forKey: praxisBinaryKey)
+        T.equal(PraxisClient.binary(defaultPath: "/bin/echo"), "/usr/bin/true",
+                "an explicit path beats the default")
+        defaults.set("   ", forKey: praxisBinaryKey)
+        T.equal(PraxisClient.binary(defaultPath: "/bin/echo"), "/bin/echo",
+                "a blank field is not a path; it means use the default")
+    }
+
     T.test("praxis hook installs with NO matcher, surgically") {
         let splice = PraxisHookConfig.splice
         T.expect(splice.matcher == nil,

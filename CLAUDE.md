@@ -424,8 +424,12 @@ row reads "flow-bar-notch - waiting on you".
 - `flow owner list` and `flow list tags` are **text, not JSON** — parsed by
   `FlowClient.listOwners`/`listTags`. If their output format changes, update
   those parsers.
-- The flow binary lives at `~/.local/bin/flow`; `FlowClient.searchPATH` lists
-  the dirs we probe.
+- The flow binary lives at `~/.local/bin/flow`; `CLI.searchPATH` lists the dirs
+  we probe. `prx` is resolved the same way but **prefers its standard install
+  path explicitly** (`PraxisClient.defaultInstallPath` = `~/.local/bin/prx`)
+  before falling back to a PATH lookup: a GUI app has no shell, so that PATH is
+  one we invented, and "which binary answered?" should not depend on it. An
+  explicit **Settings → prx binary** still wins over both.
 
 ## Distribution
 
