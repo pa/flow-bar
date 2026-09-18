@@ -78,10 +78,18 @@ public struct BackendCapabilities: Sendable {
     /// `--auto` runs headless; a praxis schedule run is always detached, so the
     /// distinction would be a lie.
     public var recurringHasForegroundRun: Bool
+    /// Whether several interchangeable work roots exist to switch between.
+    ///
+    /// flow keeps its whole store under one `FLOW_ROOT`, so pointing at another
+    /// one swaps every task, project and playbook at once — that is what a
+    /// profile is. praxis has no equivalent: its agent directory is a harness
+    /// profile, set once in Settings, not a work store you flip between while
+    /// triaging. A picker offering one immovable choice is worse than no picker.
+    public var workRoots: Bool
 
     public init(playbooks: Bool, stats: Bool, recurring: Bool,
                 recurringTitle: String, recurringNoun: String,
-                recurringHasForegroundRun: Bool)
+                recurringHasForegroundRun: Bool, workRoots: Bool)
     {
         self.playbooks = playbooks
         self.stats = stats
@@ -89,17 +97,18 @@ public struct BackendCapabilities: Sendable {
         self.recurringTitle = recurringTitle
         self.recurringNoun = recurringNoun
         self.recurringHasForegroundRun = recurringHasForegroundRun
+        self.workRoots = workRoots
     }
 
     public static let flow = BackendCapabilities(
         playbooks: true, stats: true, recurring: true,
         recurringTitle: "Owners", recurringNoun: "owner",
-        recurringHasForegroundRun: true)
+        recurringHasForegroundRun: true, workRoots: true)
 
     public static let praxis = BackendCapabilities(
         playbooks: false, stats: false, recurring: true,
         recurringTitle: "Schedules", recurringNoun: "schedule",
-        recurringHasForegroundRun: false)
+        recurringHasForegroundRun: false, workRoots: false)
 }
 
 /// Raised when the UI asks a backend for something that backend does not have.

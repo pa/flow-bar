@@ -324,37 +324,49 @@ struct MenuContentView: View {
         Self.terminalOptions.first { $0.value == store.terminalBackend }?.label ?? "Terminal"
     }
 
-    private var footer: some View {
-        HStack(spacing: 8) {
-            Menu {
-                SwiftUI.Section("Flow Roots") {
-                    ForEach(store.profiles) { p in
-                        Button {
-                            store.setActiveProfile(p.id)
-                        } label: {
-                            if p.id == store.activeProfileID {
-                                Label(p.name, systemImage: "checkmark")
-                            } else {
-                                Text(p.name)
-                            }
+    /// The flow-root switcher: one named `FLOW_ROOT` per profile.
+    ///
+    /// Shown only where several work roots are a real thing. A flow root IS
+    /// flow's whole store, so switching swaps every task, project and playbook
+    /// at once. praxis has no equivalent — its agent directory is a harness
+    /// profile set once in Settings, not something you flip between while
+    /// triaging — so the control is hidden rather than left offering a single
+    /// choice that does nothing.
+    private var flowRootsMenu: some View {
+        Menu {
+            SwiftUI.Section("Flow Roots") {
+                ForEach(store.profiles) { p in
+                    Button {
+                        store.setActiveProfile(p.id)
+                    } label: {
+                        if p.id == store.activeProfileID {
+                            Label(p.name, systemImage: "checkmark")
+                        } else {
+                            Text(p.name)
                         }
                     }
                 }
-                Divider()
-                Button("Add Flow Root…") { store.addProfileViaPicker() }
-                if store.activeProfileID != Profile.defaultID {
-                    Button("Remove “\(store.activeProfile.name)”", role: .destructive) {
-                        store.removeActiveProfile()
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "externaldrive").font(.system(size: 13))
-                    Text(store.activeProfile.name).font(.system(size: 13))
+            }
+            Divider()
+            Button("Add Flow Root…") { store.addProfileViaPicker() }
+            if store.activeProfileID != Profile.defaultID {
+                Button("Remove “\(store.activeProfile.name)”", role: .destructive) {
+                    store.removeActiveProfile()
                 }
             }
-            .menuStyle(.borderlessButton).fixedSize()
-            .help("Switch flow root")
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "externaldrive").font(.system(size: 13))
+                Text(store.activeProfile.name).font(.system(size: 13))
+            }
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .help("Switch flow root")
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if store.capabilities.workRoots { flowRootsMenu }
 
             // Terminal backend picker — its own footer control, next to the root.
             Menu {
