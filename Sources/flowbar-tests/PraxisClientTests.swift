@@ -90,24 +90,64 @@ func runPraxisClientTests() {
         T.equal(perms?.int16Value, 0o755, "executable")
     }
 
-    T.test("resume picks the newest session that is not still live") {
+    T.test("resume picks the newest session that has a conversation in it") {
         // Oldest-first, as the CLI emits it.
-        let segs: [(id: String, isOpen: Bool)] = [
-            ("sess-old", false), ("sess-mid", false), ("sess-new", false),
-        ]
-        T.equal(PraxisClient.mostRecentResumable(segments: segs, live: []), "sess-new",
-                "newest wins")
-        // The newest is still running somewhere: resuming it would serve the
-        // same session id twice, which shows an empty twin as the real one.
-        T.equal(PraxisClient.mostRecentResumable(segments: segs, live: ["sess-new"]), "sess-mid",
-                "a live session is skipped, not resumed")
-        let withOpen: [(id: String, isOpen: Bool)] = [("sess-a", false), ("sess-b", true)]
-        T.equal(PraxisClient.mostRecentResumable(segments: withOpen, live: []), "sess-a",
-                "an open segment is skipped even when holders are not reported")
-        T.expect(PraxisClient.mostRecentResumable(segments: [], live: []) == nil,
-                 "no history -> nothing to resume")
-        T.expect(PraxisClient.mostRecentResumable(segments: [("only", true)], live: ["only"]) == nil,
-                 "every candidate live -> nothing to resume")
+        let segs = ["sess-old", "sess-mid", "sess-new"]
+        T.equal(PraxisClient.mostRecentResumable(segments: segs) { _ in true }, "sess-new",
+                "newest wins when they all have content")
+
+        // The regression this exists for: clicking a task opened a blank
+        // session, which left another open segment behind, so the next click
+        // did it again. Only the old session had anything in it.
+        let empties: Set<String> = ["sess-blank-1", "sess-blank-2", "sess-blank-3"]
+        let stacked = ["sess-real"] + Array(empties).sorted()
+        T.equal(PraxisClient.mostRecentResumable(segments: stacked) { !empties.contains($0) },
+                "sess-real",
+                "empty sessions are skipped however many pile up on top")
+
+        T.expect(PraxisClient.mostRecentResumable(segments: []) { _ in true } == nil,
+                 "no history -> nothing to resume, so a fresh bound session")
+        T.expect(PraxisClient.mostRecentResumable(segments: ["a", "b"]) { _ in false } == nil,
+                 "all empty -> nothing worth resuming")
+    }
+
+    T.test("hasConversation reads content, not mere existence") {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("flowbar-conv-\(UUID().uuidString)")
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: praxisAgentDirKey)
+        defaults.set(root.path, forKey: praxisAgentDirKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: praxisAgentDirKey) }
+            else { defaults.removeObject(forKey: praxisAgentDirKey) }
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        // Shapes taken from the real store: an unused session carries only its
+        // header line; a used one has message records after it.
+        let header = #"{"type":"session","version":3,"id":"%@","cwd":"/tmp","title":"x"}"#
+        func write(_ id: String, extra: String?) throws {
+            let dir = root.appendingPathComponent("sessions/\(id)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            var body = header.replacingOccurrences(of: "%@", with: id) + "\n"
+            if let extra { body += extra + "\n" }
+            try body.write(to: dir.appendingPathComponent("session.jsonl"),
+                           atomically: true, encoding: .utf8)
+        }
+
+        let empty = "01a0b00c-8c1d-75bc-9df5-02d0addd2c17"
+        let used = "01a0a970-a677-7c25-aa11-35b2163b7b39"
+        try write(empty, extra: nil)
+        try write(used, extra: #"{"type":"message","id":"m1","message":{"role":"user"}}"#)
+
+        T.expect(!PraxisClient.hasConversation(sessionID: empty),
+                 "header only -> nothing to resume")
+        T.expect(PraxisClient.hasConversation(sessionID: used),
+                 "has a message record -> worth resuming")
+        T.expect(!PraxisClient.hasConversation(sessionID: "01a0dead-0000-0000-0000-000000000000"),
+                 "no transcript at all -> false, never a crash")
+        T.expect(!PraxisClient.hasConversation(sessionID: "../../etc/passwd"),
+                 "a bad id is rejected before it becomes a path")
     }
 
     T.test("launch script resumes when there is a session, binds when there is not") {
