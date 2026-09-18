@@ -51,6 +51,13 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
   feature-identical, and the difference is declared — not faked — through
   `BackendCapabilities`: a pane whose backing concept does not exist (praxis
   has no playbooks, no `flow stats`) is HIDDEN rather than shown empty.
+- **praxis is behind a flag until it is GA** (`praxisBackendFlagKey`):
+  `defaults write cloud.facets.flow-bar experimentalPraxisBackend -bool true`.
+  The picker is hidden without it, and `Backend.kind` returns `.flow`
+  regardless of the stored selection — the FLAG wins, so clearing it is a
+  complete way back rather than leaving someone stranded on a backend they can
+  no longer see a control for. Gate new praxis-only surface on
+  `Backend.praxisAvailable`, not on the selection.
 - **`FlowBarCore`** (library): pure data/logic, no UI.
   - `Models.swift` / `EntityModels.swift` — `FlowTask`, `Project`, `Playbook`,
     `PlaybookRun`, `Owner`, `TagCount`, `DashboardMetrics`.

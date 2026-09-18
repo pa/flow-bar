@@ -188,6 +188,11 @@ final class Store: ObservableObject {
     /// backend name, so "praxis has no playbooks" is stated in one place.
     var capabilities: BackendCapabilities { Backend.active().capabilities }
 
+    /// Whether the praxis backend is available to choose. Off unless the
+    /// experiment flag is set — see `praxisBackendFlagKey`. Read fresh rather
+    /// than cached so flipping the default and reopening Settings is enough.
+    var praxisBackendAvailable: Bool { Backend.praxisAvailable }
+
     /// Explicit path to `prx`; empty means "find it on PATH".
     @Published var praxisBinary: String = UserDefaults.standard.string(forKey: praxisBinaryKey) ?? "" {
         didSet {

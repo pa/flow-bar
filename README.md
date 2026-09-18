@@ -23,6 +23,12 @@ see what's in flight and switch between tasks without leaving the menubar.
 
 ## Two backends
 
+> **The praxis backend is experimental and off by default.** Turn it on with
+> `defaults write cloud.facets.flow-bar experimentalPraxisBackend -bool true`
+> and the **Work source** picker appears in Settings. Turn the flag off and the
+> app goes back to `flow` whatever is selected there, so it is a complete way
+> out. Without the flag, flow-bar behaves exactly as it always has.
+
 | | `flow` | praxis (`prx`) |
 |---|---|---|
 | Tasks, projects, tags | `flow list … --format json` | `prx work list … -json` |

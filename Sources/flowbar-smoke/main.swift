@@ -163,6 +163,13 @@ if let i = args.firstIndex(of: "--agent-dir"), i + 1 < args.count {
 }
 if let i = args.firstIndex(of: "--backend"), i + 1 < args.count {
     UserDefaults.standard.set(args[i + 1], forKey: workBackendKey)
+    // Asking for praxis on the command line IS the opt-in. The experiment flag
+    // exists to keep the backend out of the app's default path, not to make a
+    // developer tool refuse what it was just told to do — and this process has
+    // its own defaults domain, so setting it here touches nothing the app reads.
+    if args[i + 1] == BackendKind.praxis.rawValue {
+        UserDefaults.standard.set(true, forKey: praxisBackendFlagKey)
+    }
 }
 
 let client = Backend.active()
