@@ -3,6 +3,20 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.5.1 — 2026-09-20
+
+### Fixed
+
+- **"Rebuild for macOS N" no longer asks for a rebuild that changes nothing.**
+  The footer compared the SDK this app was built against with the macOS you are
+  running, and nothing else. Apple ships a new macOS months before the Xcode
+  carrying its SDK, so anyone who upgrades early was behind with nothing to do
+  about it — and the rebuild the footer asked for compiled against the same SDK
+  and produced an identical binary, so the prompt came straight back, surviving
+  even a `brew reinstall`. It now also asks whether a newer SDK exists on your
+  machine, and stays quiet when one doesn't. It will reappear the day the SDK
+  lands, which is the day it can be acted on.
+
 ## v0.5.0 — 2026-09-20
 
 A second way into flow-bar: **⌥Space opens a Spotlight-style palette** in the
