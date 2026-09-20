@@ -42,73 +42,40 @@ public enum ClaudeHookConfig {
     /// informational event buys nothing but a way to stall.
     public static let timeout = 5
 
+    /// The splice itself is shared with praxis, which reads the same schema —
+    /// see `HookSplice`. Only the fields above are Claude's.
+    public static let splice = HookSplice(event: event, matcher: matcher,
+                                          marker: marker, timeout: timeout)
+
     /// The command string for a given script path.
     public static func command(scriptPath: String) -> String {
-        "'\(scriptPath)' \(marker)"
+        splice.command(scriptPath: scriptPath)
     }
 
     /// Whether our entry is already present.
     public static func isInstalled(in settings: [String: Any]) -> Bool {
-        entries(in: settings).contains { isOurs($0) }
+        splice.isInstalled(in: settings)
     }
 
     /// Add our entry, replacing any earlier version of it, and leaving every
     /// other hook — ours or anyone else's — exactly as it was.
     public static func install(into settings: [String: Any], scriptPath: String) -> [String: Any] {
-        var settings = settings
-        var hooks = settings["hooks"] as? [String: Any] ?? [:]
-        // Drop a stale entry of ours first, so installing twice can't stack.
-        var list = entries(in: settings).filter { !isOurs($0) }
-        list.append([
-            "matcher": matcher,
-            "hooks": [["type": "command",
-                       "command": command(scriptPath: scriptPath),
-                       "timeout": timeout]],
-        ])
-        hooks[event] = list
-        settings["hooks"] = hooks
-        return settings
+        splice.install(into: settings, scriptPath: scriptPath)
     }
 
     /// Remove only our entry.
-    ///
-    /// Prunes the `Notification` key when it ends up empty, and the `hooks` key
-    /// when *that* ends up empty, so uninstalling leaves no debris behind — but
-    /// never touches either if someone else's entry is still there.
     public static func remove(from settings: [String: Any]) -> [String: Any] {
-        var settings = settings
-        guard var hooks = settings["hooks"] as? [String: Any] else { return settings }
-        let remaining = entries(in: settings).filter { !isOurs($0) }
-        if remaining.isEmpty {
-            hooks.removeValue(forKey: event)
-        } else {
-            hooks[event] = remaining
-        }
-        if hooks.isEmpty {
-            settings.removeValue(forKey: "hooks")
-        } else {
-            settings["hooks"] = hooks
-        }
-        return settings
+        splice.remove(from: settings)
     }
 
     /// The `Notification` entries currently configured, in order.
     public static func entries(in settings: [String: Any]) -> [[String: Any]] {
-        guard let hooks = settings["hooks"] as? [String: Any],
-              let list = hooks[event] as? [Any]
-        else { return [] }
-        return list.compactMap { $0 as? [String: Any] }
+        splice.entries(in: settings)
     }
 
     /// Whether a `Notification` entry is one flow-bar wrote.
     public static func isOurs(_ entry: [String: Any]) -> Bool {
-        guard let inner = entry["hooks"] as? [Any] else { return false }
-        return inner.contains { step in
-            guard let step = step as? [String: Any],
-                  let command = step["command"] as? String
-            else { return false }
-            return command.contains(marker)
-        }
+        splice.isOurs(entry)
     }
 }
 
@@ -133,14 +100,31 @@ public struct SessionAlert: Equatable, Sendable {
 
     /// Decode one hook payload. Returns nil for anything without a session id,
     /// which is the only field we cannot do without.
+    ///
+    /// Both harnesses send a Claude-Code-shaped object, but they name the
+    /// interesting parts differently: Claude has `notification_type` and a
+    /// ready-made `message`, praxis has `reason` (`waiting_permission` /
+    /// `waiting_question`), the `tool` that stopped, and the `question` text
+    /// itself. Reading both here keeps the rest of the app on one vocabulary.
     public static func decode(_ data: Data, at: Date) -> SessionAlert? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let sessionID = obj["session_id"] as? String, !sessionID.isEmpty
         else { return nil }
-        return SessionAlert(sessionID: sessionID,
-                            kind: (obj["notification_type"] as? String) ?? "notification",
-                            message: (obj["message"] as? String) ?? "",
-                            at: at)
+
+        let kind = (obj["notification_type"] as? String)
+            ?? (obj["reason"] as? String)
+            ?? "notification"
+
+        // Prefer whatever wording the harness already produced: its own
+        // sentence beats anything generic we could compose. praxis's
+        // `question` IS the question the session stopped on.
+        var message = (obj["message"] as? String) ?? (obj["question"] as? String) ?? ""
+        if message.isEmpty, let tool = obj["tool"] as? String, !tool.isEmpty,
+           kind == "waiting_permission"
+        {
+            message = "\(tool) needs approval"
+        }
+        return SessionAlert(sessionID: sessionID, kind: kind, message: message, at: at)
     }
 
     /// A short label for the row, derived from Claude Code's own wording where
@@ -148,11 +132,14 @@ public struct SessionAlert: Equatable, Sendable {
     public var label: String {
         if !message.isEmpty { return message }
         switch kind {
-        case "permission_prompt":  return "needs approval"
-        case "idle_prompt":        return "waiting for you"
-        case "agent_needs_input":  return "needs input"
-        case "elicitation_dialog": return "needs input"
-        default:                   return "waiting on you"
+        case "permission_prompt":   return "needs approval"
+        case "idle_prompt":         return "waiting for you"
+        case "agent_needs_input":   return "needs input"
+        case "elicitation_dialog":  return "needs input"
+        // praxis's own reasons for entering the waiting-for-input edge.
+        case "waiting_permission":  return "needs approval"
+        case "waiting_question":    return "needs input"
+        default:                    return "waiting on you"
         }
     }
 }

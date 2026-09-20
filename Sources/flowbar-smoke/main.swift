@@ -76,14 +76,181 @@ if CommandLine.arguments.contains("--detach-test") {
     printf 'survived parent exit' > \(BrewUpgrade.shellQuote(marker))
     """.write(toFile: script, atomically: true, encoding: .utf8)
     try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
-    let ok = FlowClient.spawnDetached(script, logPath: dir + "/child.log")
+    let ok = CLI.spawnDetached(script, logPath: dir + "/child.log")
     print("spawned=\(ok)")
     print("marker=\(marker)")
     print("parent exiting now; check the marker in ~4s")
     exit(ok ? 0 : 1)
 }
 
-let client = FlowClient()
+// Concurrency check: the app fires its dashboard reads at once, and a hang that
+// only appears under concurrency is invisible to every sequential test we have.
+// Reproduces it here, where it can be measured.
+if CommandLine.arguments.contains("--concurrent-test") {
+    // Mirrors what the app actually does: the dashboard refresh fires ~16 reads
+    // at once against a real binary, not one cheap `echo`. `--heavy` uses the
+    // configured prx so each call holds its threads for real work.
+    let heavy = CommandLine.arguments.contains("--heavy")
+    let n = heavy ? 16 : 6
+    let bin = heavy ? PraxisClient.binary() : "/bin/echo"
+    let callArgs: [String] = heavy ? ["work", "list", "tasks", "-json"] : []
+    print("firing \(n) concurrent CLI.run calls against \(bin)…")
+    // `--swifttask` uses Task.detached, which is what the app does. That runs on
+    // the COOPERATIVE pool (capped at core count), where a blocking call is the
+    // documented anti-pattern — and is the one difference left between this
+    // harness and the app.
+    if CommandLine.arguments.contains("--swifttask") {
+        let started = Date()
+        let sem = DispatchSemaphore(value: 0)
+        for i in 0..<n {
+            Task.detached(priority: .userInitiated) {
+                let t0 = Date()
+                do {
+                    let (out, _, code) = try CLI.run(bin, callArgs.isEmpty ? ["call-\(i)"] : callArgs,
+                                                     timeout: 20)
+                    print("  call-\(i): exit=\(code) \(Int(Date().timeIntervalSince(t0) * 1000))ms  \(out.count) bytes")
+                } catch {
+                    print("  call-\(i): FAILED after \(Int(Date().timeIntervalSince(t0) * 1000))ms — \(error)")
+                }
+                sem.signal()
+            }
+        }
+        for _ in 0..<n { sem.wait() }
+        print("total \(Int(Date().timeIntervalSince(started) * 1000))ms  (Task.detached)")
+        exit(0)
+    }
+
+    let started = Date()
+    let group = DispatchGroup()
+    for i in 0..<n {
+        group.enter()
+        DispatchQueue.global().async {
+            let t0 = Date()
+            do {
+                let (out, _, code) = try CLI.run(bin, callArgs.isEmpty ? ["call-\(i)"] : callArgs,
+                                                 timeout: 20)
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                print("  call-\(i): exit=\(code) \(ms)ms  \(out.count) bytes")
+            } catch {
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                print("  call-\(i): FAILED after \(ms)ms — \(error)")
+            }
+            group.leave()
+        }
+    }
+    group.wait()
+    print("total \(Int(Date().timeIntervalSince(started) * 1000))ms")
+    exit(0)
+}
+
+// `--tty-for <session-id>` resolves the terminal tab a session is showing in,
+// WITHOUT focusing it — checking the resolution should not steal your window.
+if let i = CommandLine.arguments.firstIndex(of: "--tty-for"),
+   i + 1 < CommandLine.arguments.count
+{
+    let id = CommandLine.arguments[i + 1]
+    let ps = (try? CLI.run("/bin/ps", ["-axo", "pid,tty,command"], timeout: 10))
+        .flatMap { String(data: $0.stdout, encoding: .utf8) } ?? ""
+    let byArgv = PraxisClient.ttyServing(slug: "", session: id, psOutput: ps)
+    let byOwner = PraxisClient.ttyFromOwnerRecord(sessionID: id, psOutput: ps)
+    print("session:      \(id)")
+    print("tty by argv:  \(byArgv ?? "(not in any command line)")")
+    print("tty by owner: \(byOwner ?? "(no live owner with a terminal)")")
+    print("would focus:  \(byArgv ?? byOwner ?? "(nothing — a new tab would open)")")
+    exit(0)
+}
+
+// `--sessions-for <slug>` prints the picker's own list: which sessions the task
+// offers, what each is about, and which one a plain click would take. Answers
+// "why is my session not in the menu?" without opening a terminal.
+if let i = CommandLine.arguments.firstIndex(of: "--sessions-for"),
+   i + 1 < CommandLine.arguments.count
+{
+    let slug = CommandLine.arguments[i + 1]
+    if let j = CommandLine.arguments.firstIndex(of: "--prx"), j + 1 < CommandLine.arguments.count {
+        UserDefaults.standard.set(CommandLine.arguments[j + 1], forKey: praxisBinaryKey)
+    }
+    do {
+        let client = PraxisClient()
+        let detail = try client.taskDetail(slug)
+        let auto = try client.resumePlan(slug).resume
+        print("task:     \(slug)")
+        print("offered:  \(detail.sessions.count) session(s) "
+              + "(empty ones are deliberately not offered)")
+        for s in detail.sessions {
+            let mark = s.id == auto ? "← a plain click" : ""
+            let age = s.started.map { RelativeAge.short($0, now: Date()) } ?? "?"
+            print("  \(s.live ? "●" : " ") \(s.id.prefix(8))  \(age.padding(toLength: 5, withPad: " ", startingAt: 0))"
+                  + "  \(s.label)  \(mark)")
+        }
+        if detail.sessions.isEmpty {
+            print("  (nothing resumable — a click starts a session bound to the task)")
+        }
+    } catch {
+        FileHandle.standardError.write(Data("sessions-for failed: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+}
+
+// `--resume-for <slug>` answers "what will clicking this task actually open?"
+// against the real store, without opening a terminal to find out.
+if let i = CommandLine.arguments.firstIndex(of: "--resume-for"),
+   i + 1 < CommandLine.arguments.count
+{
+    let slug = CommandLine.arguments[i + 1]
+    if let j = CommandLine.arguments.firstIndex(of: "--prx"), j + 1 < CommandLine.arguments.count {
+        UserDefaults.standard.set(CommandLine.arguments[j + 1], forKey: praxisBinaryKey)
+    }
+    do {
+        let plan = try PraxisClient().resumePlan(slug)
+        print("task:     \(slug)")
+        print("work dir: \(plan.workDir ?? "(none — falls back to home)")")
+        if let resume = plan.resume {
+            print("resumes:  \(resume)")
+        } else {
+            print("resumes:  (nothing with a conversation in it — starts a session bound to the task)")
+        }
+        let script = try PraxisClient.writeLaunchScript(slug: slug, workDir: plan.workDir,
+                                                        resume: plan.resume)
+        print("script:\n" + ((try? String(contentsOfFile: script, encoding: .utf8)) ?? ""))
+        try? FileManager.default.removeItem(atPath: script)
+    } catch {
+        FileHandle.standardError.write(Data("resume-for failed: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+}
+
+// Which CLI to exercise. Defaults to whatever the app is set to, so a bare run
+// reproduces what the user sees; `--backend praxis` and `--prx <path>` are how a
+// prx build gets exercised before it is the installed one.
+let args = CommandLine.arguments
+if let i = args.firstIndex(of: "--prx"), i + 1 < args.count {
+    UserDefaults.standard.set(args[i + 1], forKey: praxisBinaryKey)
+}
+if let i = args.firstIndex(of: "--agent-dir"), i + 1 < args.count {
+    UserDefaults.standard.set(args[i + 1], forKey: praxisAgentDirKey)
+}
+if let i = args.firstIndex(of: "--backend"), i + 1 < args.count {
+    UserDefaults.standard.set(args[i + 1], forKey: workBackendKey)
+    // Asking for praxis on the command line IS the opt-in. The experiment flag
+    // exists to keep the backend out of the app's default path, not to make a
+    // developer tool refuse what it was just told to do — and this process has
+    // its own defaults domain, so setting it here touches nothing the app reads.
+    if args[i + 1] == BackendKind.praxis.rawValue {
+        UserDefaults.standard.set(true, forKey: praxisBackendFlagKey)
+    }
+}
+
+let client = Backend.active()
+print("Backend: \(client.kind.label)")
+do {
+    print("  \(try client.probe())\n")
+} catch {
+    FileHandle.standardError.write(Data("  UNUSABLE: \(error)\n".utf8))
+    exit(1)
+}
 
 do {
     let tasks = try client.inProgressTasks()
@@ -116,12 +283,12 @@ do {
     // absent from the default list), headless --auto runs dropped.
     let tasks = try client.inProgressTasksIncludingRuns().filter(\.isLive)
     if tasks.isEmpty {
-        print("  (no live sessions — start one with `flow do <slug>` to exercise this)")
+        print("  (no live sessions — open a task from flow-bar to exercise this)")
     }
     for t in tasks {
         let info = try client.sessionInfo(t.slug)
         guard let sessionID = info.sessionID else {
-            print("  \(t.slug): live, but flow reports no session_id  ← unexpected")
+            print("  \(t.slug): live, but \(client.kind.label) reports no session id  ← unexpected")
             continue
         }
         if info.autoRunning {
@@ -130,7 +297,7 @@ do {
         }
         guard let located = SessionLocator.locate(sessionID: sessionID) else {
             print("  \(t.slug): session \(sessionID.prefix(8)) has no transcript "
-                  + "under ~/.claude/projects or ~/.codex/sessions")
+                  + "under any known harness root")
             continue
         }
         let tail = TranscriptTail(url: located.url)

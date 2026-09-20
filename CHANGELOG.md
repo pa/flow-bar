@@ -3,6 +3,109 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## Unreleased
+
+### Added
+
+- **Pick your work source: `flow` or the praxis harness (`prx`)** — behind an
+  experiment flag, because the praxis path is not GA:
+  `defaults write cloud.facets.flow-bar experimentalPraxisBackend -bool true`.
+  Without it nothing changes: the picker is hidden and the app is `flow`, even
+  if a praxis selection is already stored. Clearing the flag is therefore a
+  complete way back rather than a half-migration. With it, Settings gains
+  a **Work source** section. On praxis, tasks, projects, briefs, notes and tags
+  come from `prx work … -json`, and flow's owners are replaced by praxis
+  schedules (`prx schedule … -json`) — same pane, named the way your CLI names
+  it. What praxis has no equivalent of is hidden rather than faked: no Playbooks
+  rail item, no runs tile, no AI-memory card. Existing installs are untouched —
+  an absent setting still means `flow`.
+- **Switching to a task under praxis** opens your terminal on a `prx` session
+  already bound to the task, rooted in its work directory, so notes written
+  there are attributed. It goes through `open` rather than AppleScript, so
+  unlike the flow path it needs no Automation grant.
+- **Session alerts fire for praxis sessions.** The hook that makes a permission
+  prompt detectable at all — the transcript shows nothing until it is answered
+  — is now installed into the praxis harness's `settings.json` as well as
+  Claude Code's. praxis maps `Notification` onto its `attention_needed` event,
+  which fires exactly when the runtime starts blocking on you and cannot block
+  or delay it, so a wedged flow-bar still cannot get in the way of a prompt.
+  Rows read the harness's own wording where there is any: the question a
+  session stopped on, or “Bash needs approval”.
+- **Live sessions work under praxis too.** flow-bar reads praxis session
+  transcripts (`~/.praxis/agent/sessions/<id>/session.jsonl`) alongside Claude
+  Code and Codex, so the menubar alert and the Needs-you list behave the same
+  whichever harness is running.
+- **A Check button** next to the work source reports which binary answered and
+  whether it has the commands the app needs. It exists because a `prx` too old
+  to have `work` otherwise looks exactly like having no tasks.
+
+### Fixed
+
+- **Every pane showing zero, and a spinner that never stopped.** The dashboard
+  fires ~16 CLI reads at once from `Task.detached`, which runs on Swift's
+  cooperative thread pool — capped near the core count. Draining each child's
+  two pipes on their own queues needed three threads per call, so at that
+  concurrency the pool starved and the reads that would release each caller
+  could never be scheduled; an unbounded wait on the cleanup path then lost the
+  thread for good, and the app degraded until every call timed out. Both pipes
+  are now drained on the caller's own thread with `poll(2)` and a deadline: no
+  extra threads, no unbounded wait. The 16-call reproduction went from hanging
+  indefinitely to 634ms.
+- **A wedged CLI can no longer hang the app.** Every read is bounded and the
+  child is killed if it overruns. Found the hard way: `prx` treats arguments it
+  does not recognise as a *prompt* and tries to become an interactive session,
+  so asking an older `prx` for tasks hung forever with the popover spinning.
+- **Large CLI output can no longer deadlock a read.** Both streams are watched
+  together; reading them in sequence stalls as soon as the child fills the
+  other pipe's buffer, which a task list with long briefs comfortably exceeds.
+
+### Added
+
+- **Choose WHICH session a task opens.** Under praxis a task accumulates a
+  session per stretch of work — one real task here has 23 — so “open the task”
+  had more than one answer and you got the one flow-bar guessed. The detail
+  pane’s **Open** is now a split control: the button still opens the session the
+  task was last worked in, and the menu names the others, plus **New session…**
+  for a deliberately clean start. Each line is the session’s own title with its
+  age, and ● marks one that is already on screen — picking that one focuses its
+  tab instead of opening anything. Empty sessions are not offered at all, since
+  resuming one is the same as starting fresh. `flowbar-smoke --sessions-for
+  <slug>` prints the same list from the terminal.
+
+### Changed
+
+- **The flow-root switcher is hidden under praxis.** A flow root is flow's
+  whole store, so switching one swaps every task, project and playbook at once.
+  praxis has no equivalent — its agent directory is a harness profile set once
+  in Settings, not something you flip between while triaging — so the footer
+  control goes away rather than offering a single choice that does nothing.
+- **`prx` is found at `~/.local/bin/prx` without being configured.** That is
+  where the harness installs itself, so the common case now needs no path in
+  Settings at all; a PATH lookup remains the fallback, and an explicit **prx
+  binary** still overrides both.
+- **Opening a task under praxis goes to the tab it is already in**, the way
+  `flow do` does, instead of opening a second tab onto the same session. The
+  running session is found in `ps` by the id its own process carries, its
+  controlling tty identifies the tab, and AppleScript selects it; a session
+  started by hand — which carries nothing in argv — is found through the
+  harness's ownership record instead, with the pid checked against `ps` so a
+  recycled one cannot focus a stranger's window. Only iTerm2 and Terminal
+  expose a tty per tab, so the other picks open a new tab rather than a wrong
+  one, and the first focus asks for Automation permission.
+- **Opening a task under praxis resumes its session** instead of starting a
+  blank one: flow-bar moves to the task's work directory and reopens the most
+  recent session that actually has a conversation in it (`prx -resume`). A task
+  with no such session still gets a fresh one bound to it.
+
+  The selection deliberately ignores two things that look relevant and are not.
+  A segment's "open" flag is not liveness — it only clears on a clean exit, so
+  abandoned sessions stay open forever; treating it as in-use made every
+  session unresumable, so each click opened a blank one and left another open
+  segment behind for the next click to trip over. And a session that IS live is
+  not skipped: `prx -resume` already falls through to following a session whose
+  live writer refuses the resume, which beats opening an empty session beside
+  the one you asked for.
+
 ## v0.5.1 — 2026-09-20
 
 ### Fixed

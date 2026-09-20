@@ -15,9 +15,38 @@ see what's in flight and switch between tasks without leaving the menubar.
 ![Platform: macOS 15+](https://img.shields.io/badge/macOS-15%2B-black?logo=apple)
 ![Built with Swift](https://img.shields.io/badge/Swift-6-orange?logo=swift)
 
-> flow-bar is a **companion** to the `flow` CLI — it reads your tasks through
-> `flow … --format json` and switches to them with `flow do`. You need `flow`
-> installed and on your `PATH`.
+> flow-bar is a **companion** to a local work CLI. Out of the box that is
+> `flow` — it reads your tasks through `flow … --format json` and switches to
+> them with `flow do`. It can also be pointed at the **praxis harness**
+> (`prx`), which keeps the same concepts natively; pick one under
+> **Settings → Work source**. flow-bar finds `prx` at `~/.local/bin/prx`, where
+> it installs itself, and otherwise looks on your `PATH`; the **prx binary**
+> field overrides both when yours lives elsewhere.
+
+## Two backends
+
+> **The praxis backend is experimental and off by default.** Turn it on with
+> `defaults write cloud.facets.flow-bar experimentalPraxisBackend -bool true`
+> and the **Work source** picker appears in Settings. Turn the flag off and the
+> app goes back to `flow` whatever is selected there, so it is a complete way
+> out. Without the flag, flow-bar behaves exactly as it always has.
+
+| | `flow` | praxis (`prx`) |
+|---|---|---|
+| Tasks, projects, tags | `flow list … --format json` | `prx work list … -json` |
+| Brief + updates | `flow show task` | `prx work show -json` |
+| Recurring agents | Owners (`flow owner`) | Schedules (`prx schedule`) |
+| Playbooks & runs | yes | — *(pane hidden)* |
+| AI-memory stats | `flow stats` | — *(card hidden)* |
+| Work roots | named `FLOW_ROOT`s, switchable | — *(picker hidden; one agent dir)* |
+| Sessions per task | one | many — *Open* lets you pick, or start a new one |
+| Switch to a task | `flow do <slug>` | a `.command` that execs `prx -resume`/`-work` |
+
+What praxis has no equivalent of is **hidden, not faked** — an empty pane that
+can never fill is worse than no pane. The praxis path needs a `prx` that has
+the `work` command; **Settings → Work source → Check** tells you which binary
+answered and whether it does, instead of leaving you with a task list that is
+silently empty.
 
 ## Features
 

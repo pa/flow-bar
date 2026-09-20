@@ -39,6 +39,29 @@ public enum SessionLocator {
         return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/sessions")
     }
 
+    /// Praxis's session root: `<agentDir>/sessions`, one directory per session
+    /// holding a `session.jsonl`.
+    ///
+    /// The agent dir is the app's own setting first and `PRAXIS_CODING_AGENT_DIR`
+    /// second — deliberately the same precedence `PraxisClient.praxisEnv()` hands
+    /// to `prx`. If the two disagreed the app would watch one profile's sessions
+    /// while driving another's, and every task would read as having no
+    /// transcript at all. Recomputed per call, like `Backend.kind`, so switching
+    /// profiles takes effect on the next refresh rather than at relaunch.
+    public static var defaultPraxisRoot: URL {
+        let agentDir: String
+        if let chosen = UserDefaults.standard.string(forKey: praxisAgentDirKey), !chosen.isEmpty {
+            agentDir = (chosen as NSString).expandingTildeInPath
+        } else if let env = ProcessInfo.processInfo.environment["PRAXIS_CODING_AGENT_DIR"],
+                  !env.isEmpty {
+            agentDir = (env as NSString).expandingTildeInPath
+        } else {
+            agentDir = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".praxis/agent").path
+        }
+        return URL(fileURLWithPath: agentDir).appendingPathComponent("sessions")
+    }
+
     /// A transcript found on disk, and which harness wrote it.
     public struct Located: Equatable, Sendable {
         public let url: URL
@@ -64,11 +87,29 @@ public enum SessionLocator {
     /// Locate the transcript for a harness session id, whichever harness wrote
     /// it. Claude Code is probed first because it is the common case and costs
     /// a handful of `stat`s; the Codex tree needs a walk.
+    ///
+    /// Praxis jumps that queue when the app is being driven by `prx`, because
+    /// then every live session id came from praxis and the other two probes are
+    /// guaranteed misses — the Codex one being a full directory walk. It is
+    /// still probed last rather than skipped otherwise, so a praxis session left
+    /// running still resolves after the user flips the backend back to flow.
+    ///
+    /// `preferPraxis` defaults to the app's current backend instead of the probe
+    /// reaching into UserDefaults itself: a default argument is evaluated at the
+    /// call site, so the ambient choice stays visible in the signature while the
+    /// function body remains a pure function of its arguments — which is what
+    /// lets the tests drive both orders without touching global state.
     public static func locate(sessionID: String,
                               claudeRoot: URL? = nil,
                               codexRoot: URL? = nil,
+                              praxisRoot: URL? = nil,
+                              preferPraxis: Bool = Backend.kind == .praxis,
                               fileManager: FileManager = .default) -> Located? {
         guard isValidSessionID(sessionID) else { return nil }
+        if preferPraxis, let url = praxisTranscriptURL(sessionID: sessionID, root: praxisRoot,
+                                                       fileManager: fileManager) {
+            return Located(url: url, format: .praxis)
+        }
         if let url = claudeTranscriptURL(sessionID: sessionID, root: claudeRoot,
                                          fileManager: fileManager) {
             return Located(url: url, format: .claude)
@@ -76,6 +117,10 @@ public enum SessionLocator {
         if let url = codexTranscriptURL(sessionID: sessionID, root: codexRoot,
                                         fileManager: fileManager) {
             return Located(url: url, format: .codex)
+        }
+        if !preferPraxis, let url = praxisTranscriptURL(sessionID: sessionID, root: praxisRoot,
+                                                        fileManager: fileManager) {
+            return Located(url: url, format: .praxis)
         }
         return nil
     }
@@ -117,6 +162,22 @@ public enum SessionLocator {
             return url
         }
         return nil
+    }
+
+    /// `<agentDir>/sessions/<sessionID>/session.jsonl`.
+    ///
+    /// The only one of the three that is a computed path rather than a search:
+    /// praxis files a session under its own id, so there is nothing to probe or
+    /// walk and one `stat` settles it. The id is still validated first, because
+    /// a path component is exactly where a bad parse turns into a traversal.
+    public static func praxisTranscriptURL(sessionID: String,
+                                           root: URL? = nil,
+                                           fileManager: FileManager = .default) -> URL? {
+        guard isValidSessionID(sessionID) else { return nil }
+        let candidate = (root ?? defaultPraxisRoot)
+            .appendingPathComponent(sessionID, isDirectory: true)
+            .appendingPathComponent("session.jsonl")
+        return fileManager.fileExists(atPath: candidate.path) ? candidate : nil
     }
 }
 

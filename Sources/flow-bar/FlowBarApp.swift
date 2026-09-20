@@ -243,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // The two events are milliseconds apart, so treat an open that lands
         // right after a close as the back half of one click and drop it.
         if Date().timeIntervalSince(lastPopoverCloseAt) < Self.reopenSuppression {
-            if SessionMonitor.verbose { FlowClient.log("popover: suppressed reopen after close") }
+            if SessionMonitor.verbose { CLI.log("popover: suppressed reopen after close") }
             return
         }
         // A blocked session is the reason you clicked, so land on Needs-you
@@ -374,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func startPulse() {
         guard pulseTimer == nil else { return }
-        if SessionMonitor.verbose { FlowClient.log("icon: pulse started") }
+        if SessionMonitor.verbose { CLI.log("icon: pulse started") }
         pulseDim = false
         let timer = Timer.scheduledTimer(withTimeInterval: Self.pulsePeriod, repeats: true) {
             [weak self] _ in
@@ -399,7 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func stopPulse() {
         guard pulseTimer != nil else { return }
-        if SessionMonitor.verbose { FlowClient.log("icon: pulse stopped") }
+        if SessionMonitor.verbose { CLI.log("icon: pulse stopped") }
         pulseTimer?.invalidate()
         pulseTimer = nil
         pulseDim = false

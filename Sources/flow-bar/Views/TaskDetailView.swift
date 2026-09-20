@@ -63,18 +63,81 @@ struct TaskDetailView: View {
 
             // Done/archived tasks have nothing to switch to — no Open action.
             if store.taskDetail?.canOpen == true {
-                Button(action: { store.switchTo(slug) }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.right.circle").font(.system(size: 14))
-                        Text("Open").font(.system(size: 14, weight: .medium))
+                let sessions = store.taskDetail?.sessions ?? []
+                // With more than one session on the task, Open alone cannot
+                // say WHICH — so it becomes a split control: the button still
+                // opens the obvious one, the menu names them. A single session
+                // gets the plain button, because a menu of one is a menu that
+                // only costs a click.
+                if store.capabilities.multipleSessionsPerTask && sessions.count > 1 {
+                    // A long-running task accumulates these — one real task
+                    // offers 23 — and a 23-line menu is a wall rather than a
+                    // choice. The most recent handful is what anyone actually
+                    // resumes; the rest are named by `flowbar-smoke
+                    // --sessions-for <slug>` rather than pretended away.
+                    let shown = sessions.prefix(Self.sessionsInMenu)
+                    let hidden = sessions.count - shown.count
+                    Menu {
+                        SwiftUI.Section("Resume a session") {
+                            ForEach(shown) { s in
+                                Button(Self.sessionLabel(s)) {
+                                    store.switchTo(slug, skipPermissions: false,
+                                                   destination: .session(s.id))
+                                }
+                            }
+                            if hidden > 0 {
+                                Button("\(hidden) older not shown") {}.disabled(true)
+                            }
+                        }
+                        Divider()
+                        Button("New session…") {
+                            store.switchTo(slug, skipPermissions: false, destination: .fresh)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.right.circle").font(.system(size: 14))
+                            Text("Open").font(.system(size: 14, weight: .medium))
+                        }
+                    } primaryAction: {
+                        store.switchTo(slug)
                     }
-                    .contentShape(Rectangle())
+                    .menuStyle(.borderlessButton).fixedSize()
+                    .help("Open the session this task was last worked in, "
+                          + "or pick from its \(sessions.count) sessions")
+                } else {
+                    Button(action: { store.switchTo(slug) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.right.circle").font(.system(size: 14))
+                            Text("Open").font(.system(size: 14, weight: .medium))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Switch to this task")
                 }
-                .buttonStyle(.plain)
-                .help("Switch to this task")
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
+    }
+
+    /// How many sessions the Open menu lists before it stops.
+    static let sessionsInMenu = 8
+
+    /// One session, as a menu line: what it is about, how old it is, and
+    /// whether it is on screen right now.
+    ///
+    /// The title carries the choice — it is the session's own, so two sessions
+    /// on one task read as "discovery capture" vs "call documentation" rather
+    /// than as two UUIDs. The age disambiguates two similar titles, and ● marks
+    /// the one already running, since picking it focuses that tab instead of
+    /// opening anything.
+    static func sessionLabel(_ s: TaskSession) -> String {
+        var line = s.live ? "● " : ""
+        line += s.label
+        if let started = s.started {
+            line += "  —  \(RelativeAge.short(started, now: Date())) ago"
+        }
+        return line
     }
 
     @State private var copied = false
