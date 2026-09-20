@@ -8,6 +8,11 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repo; a token that can't is a token that can't be
+# stolen for anything.
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -35,8 +40,52 @@ jobs:
       - name: Test
         run: swift run flowbar-tests
 
+      # The brew self-upgrade script is built by string interpolation and only
+      # ever runs while the app is quitting — the worst possible moment to
+      # discover a syntax error, since nothing is left alive to report it.
+      # `flowbar-smoke --upgrade-script` prints it precisely so this can parse it.
+      - name: Check the self-upgrade script parses
+        run: swift run flowbar-smoke --upgrade-script | sh -n
+
       # The app bundle is assembled by a shell script rather than SwiftPM, so
       # exercise that path too — a broken build-app.sh breaks every install.
+      - name: Assemble the app bundle
+        run: ./build-app.sh --version 0.0.0 --channel dev --no-sign
+
+      # The bundle must carry the changelog, or "what's new" silently shows
+      # nothing — a resource that is missing looks exactly like a build with no
+      # notes to show.
+      - name: Release notes are bundled
+        run: test -s flow-bar.app/Contents/Resources/release-notes.md
+
+  # The cask compiles on the USER's machine, and most of those machines have
+  # Command Line Tools and no Xcode. That premise is why the test harness is a
+  # plain executable instead of XCTest and why the macOS floor is 15 — and
+  # nothing above verifies it, because every job there selects full Xcode. If
+  # this job goes red, the source-install path is broken for everyone installing
+  # by brew, and the app itself would give no sign of it.
+  command-line-tools:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Use Command Line Tools, not Xcode
+        run: |
+          set -euo pipefail
+          if [ ! -d /Library/Developer/CommandLineTools ]; then
+            echo "::error::no Command Line Tools on this runner — the source-install path cannot be verified"
+            exit 1
+          fi
+          sudo xcode-select -s /Library/Developer/CommandLineTools
+          echo "developer dir: $(xcode-select -p)"
+          swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift run flowbar-tests
+
       - name: Assemble the app bundle
         run: ./build-app.sh --version 0.0.0 --channel dev --no-sign
 
