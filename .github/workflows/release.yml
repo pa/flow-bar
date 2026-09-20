@@ -33,21 +33,25 @@ jobs:
           swift --version
           echo "SDK: $(xcrun --show-sdk-version)"
 
-      # The tag, the cask and the changelog are edited by hand in three places
-      # and nothing makes them agree. When they don't, the release ships notes
-      # describing a different version than the one being installed — and every
-      # part of it still "works", so nobody finds out. Fail before building.
-      - name: Tag, cask and changelog agree
+      # The changelog is written by hand and the tag is typed by hand, so they
+      # can disagree — and when they do the release publishes notes describing a
+      # different version than the one being installed, while every part of it
+      # still "works". Fail before building.
+      #
+      # The CASK is deliberately NOT compared here. This workflow rewrites it
+      # further down, because its checksum is over the tag's source tarball,
+      # which cannot exist until the tag does. At this point it still holds the
+      # previous version, and that is correct.
+      - name: Tag and changelog agree
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          cask="$(sed -n 's/^  version "\(.*\)"/\1/p' Casks/flow-bar.rb)"
           notes="$(awk '/^## /{ line=$0; sub(/^## /,"",line); split(line,a,/[ \t]/); v=a[1]; sub(/^v/,"",v); print v; exit }' CHANGELOG.md)"
-          echo "tag=$tag cask=$cask changelog=$notes"
-          fail=0
-          [ "$cask" = "$tag" ] || { echo "::error::Casks/flow-bar.rb says $cask, tag says $tag"; fail=1; }
-          [ "$notes" = "$tag" ] || { echo "::error::CHANGELOG.md's newest section is $notes, tag says $tag"; fail=1; }
-          exit $fail
+          echo "tag=$tag changelog=$notes"
+          [ "$notes" = "$tag" ] || {
+            echo "::error::CHANGELOG.md's newest section is $notes, tag says $tag"
+            exit 1
+          }
 
       - name: Run tests
         run: swift run flowbar-tests
@@ -122,16 +126,44 @@ jobs:
           test -n "${SHA:-}" || { echo "::error::could not fetch $URL"; exit 1; }
           echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
 
+      # Pushes straight to main, which the branch ruleset otherwise forbids —
+      # every other route to main needs a pull request.
+      #
+      # It authenticates with a **deploy key** rather than GITHUB_TOKEN, for two
+      # reasons. GitHub sees the default token as `github-actions[bot]`, which
+      # cannot be a bypass actor here: Integration bypass is org-only and this
+      # is a user-owned repository. And a pull request opened with GITHUB_TOKEN
+      # does not trigger workflows, so its required checks would never report
+      # and it could never merge. A deploy key is a bypass actor type rulesets
+      # do accept, and it is scoped to this one repository — if it ever leaked,
+      # the blast radius is flow-bar and nothing else.
+      #
+      # The key is passed through `env:` and never interpolated into the script:
+      # `${{ secrets.X }}` inside `run:` is substituted textually, so the literal
+      # value becomes part of the command and a shell error can echo it. Logs on
+      # this repo are public. Nothing here prints the key, and the job can only
+      # be triggered by someone who can already push a tag.
       - name: Update Homebrew cask
+        env:
+          CASK_DEPLOY_KEY: ${{ secrets.CASK_DEPLOY_KEY }}
+          SOURCE_SHA: ${{ steps.sum.outputs.sha256 }}
         run: |
           set -euo pipefail
           # Fails loudly on a botched rewrite instead of shipping a stale cask.
-          python3 scripts/cask_update.py "${GITHUB_REF_NAME#v}" "${{ steps.sum.outputs.sha256 }}"
+          python3 scripts/cask_update.py "${GITHUB_REF_NAME#v}" "$SOURCE_SHA"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/flow-bar.rb
           git commit -m "cask: ${GITHUB_REF_NAME} (source build)" || echo "no cask change"
-          git push origin HEAD:main
+
+          KEY="$RUNNER_TEMP/cask_deploy"
+          umask 077
+          printf '%s\n' "$CASK_DEPLOY_KEY" > "$KEY"
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" \
+            git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main
+          rm -f "$KEY"
 
       # Publish the top (latest) CHANGELOG.md section as the release notes,
       # with the install instructions appended. NOTE: softprops/action-gh-release
