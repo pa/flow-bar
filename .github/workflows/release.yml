@@ -33,21 +33,25 @@ jobs:
           swift --version
           echo "SDK: $(xcrun --show-sdk-version)"
 
-      # The tag, the cask and the changelog are edited by hand in three places
-      # and nothing makes them agree. When they don't, the release ships notes
-      # describing a different version than the one being installed — and every
-      # part of it still "works", so nobody finds out. Fail before building.
-      - name: Tag, cask and changelog agree
+      # The changelog is written by hand and the tag is typed by hand, so they
+      # can disagree — and when they do the release publishes notes describing a
+      # different version than the one being installed, while every part of it
+      # still "works". Fail before building.
+      #
+      # The CASK is deliberately NOT compared here. This workflow rewrites it
+      # further down, because its checksum is over the tag's source tarball,
+      # which cannot exist until the tag does. At this point it still holds the
+      # previous version, and that is correct.
+      - name: Tag and changelog agree
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          cask="$(sed -n 's/^  version "\(.*\)"/\1/p' Casks/flow-bar.rb)"
           notes="$(awk '/^## /{ line=$0; sub(/^## /,"",line); split(line,a,/[ \t]/); v=a[1]; sub(/^v/,"",v); print v; exit }' CHANGELOG.md)"
-          echo "tag=$tag cask=$cask changelog=$notes"
-          fail=0
-          [ "$cask" = "$tag" ] || { echo "::error::Casks/flow-bar.rb says $cask, tag says $tag"; fail=1; }
-          [ "$notes" = "$tag" ] || { echo "::error::CHANGELOG.md's newest section is $notes, tag says $tag"; fail=1; }
-          exit $fail
+          echo "tag=$tag changelog=$notes"
+          [ "$notes" = "$tag" ] || {
+            echo "::error::CHANGELOG.md's newest section is $notes, tag says $tag"
+            exit 1
+          }
 
       - name: Run tests
         run: swift run flowbar-tests
@@ -122,6 +126,10 @@ jobs:
           test -n "${SHA:-}" || { echo "::error::could not fetch $URL"; exit 1; }
           echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
 
+      # NOTE: this pushes straight to main, which the branch ruleset otherwise
+      # forbids. GitHub Actions is a bypass actor on that ruleset for exactly
+      # this step — the alternative is a release that stops halfway and leaves
+      # the cask pointing at the previous version.
       - name: Update Homebrew cask
         run: |
           set -euo pipefail
