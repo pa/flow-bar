@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in flow-bar behaves wrongly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is about the `flow` CLI rather than the menubar app, please file
+        it on [Facets-cloud/flow](https://github.com/Facets-cloud/flow) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: flow-bar version
+      description: The version in the popover footer — click it for the release notes.
+      placeholder: "0.5.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "15.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew cask (compiled on my machine)
+        - Downloaded .dmg / .zip
+        - Built from source myself
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Anything in the log?
+      description: |
+        For session-alert problems, turn on tracing first:
+        `defaults write cloud.facets.flow-bar sessionWatchVerbose -bool true`
+      render: text
