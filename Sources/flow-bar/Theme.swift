@@ -23,7 +23,15 @@ enum Theme {
     /// Whether this OS can render Liquid Glass. The single switch the rest of
     /// the UI branches on.
     static var isGlass: Bool {
+        // Both halves matter: `GLASS` says the SDK we compiled against has the
+        // API, `#available` says the machine we are running on has it. Without
+        // the first, a macOS 15 SDK build would take the transparent
+        // glass-backed path with no glass behind it — a hole, not a material.
+        #if GLASS
         if #available(macOS 26.0, *) { return true } else { return false }
+        #else
+        return false
+        #endif
     }
 
     // MARK: Legacy opaque values (macOS 15 path, and the glass fallbacks)

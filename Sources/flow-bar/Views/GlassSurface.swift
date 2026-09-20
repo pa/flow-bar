@@ -1,6 +1,19 @@
 import AppKit
 import SwiftUI
 
+// `#if GLASS` is set by `build-app.sh` when the macOS SDK it is compiling
+// against is 26 or newer (see its `detect_sdk_version`). It is NOT a runtime
+// check and cannot be replaced by one: `#available(macOS 26.0, *)` decides
+// whether to *call* an API on the machine running the app, and says nothing
+// about whether that API exists in the SDK being compiled against. `glassEffect`
+// does not exist in the macOS 15 SDK, so on a Command-Line-Tools machine the
+// file did not compile at all — and since the cask compiles on the user's
+// machine, that meant a macOS 15 user could not install flow-bar. Caught by the
+// `command-line-tools` CI job; invisible to every build made with Xcode.
+//
+// Both guards are needed together: the `#if` decides whether the code can be
+// built, the `#available` decides whether it may run.
+
 /// Real window-behind vibrancy for the popover.
 ///
 /// The app used to paint every surface with an opaque fill so it "renders
@@ -48,12 +61,17 @@ extension View {
     /// already used, so nothing regresses.
     @ViewBuilder
     func glassSurface(cornerRadius: CGFloat, fallback: Color) -> some View {
+        #if GLASS
         if #available(macOS 26.0, *) {
             self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         } else {
             self.background(fallback)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
+        #else
+        self.background(fallback)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        #endif
     }
 
     /// Interactive glass for controls that respond to clicks (rail items,
@@ -61,6 +79,7 @@ extension View {
     /// system uses; below it this is an ordinary tinted fill.
     @ViewBuilder
     func glassControl(cornerRadius: CGFloat, tinted: Bool, fallback: Color) -> some View {
+        #if GLASS
         if #available(macOS 26.0, *) {
             if tinted {
                 self.glassEffect(.regular.tint(Theme.accent.opacity(0.55)).interactive(),
@@ -73,6 +92,10 @@ extension View {
             self.background(fallback)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
+        #else
+        self.background(fallback)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        #endif
     }
 }
 
@@ -81,6 +104,7 @@ extension View {
     /// interactive glass capsule; below it, the tinted fill the rail always had.
     @ViewBuilder
     func railSelection(isSelected: Bool) -> some View {
+        #if GLASS
         if #available(macOS 26.0, *) {
             if isSelected {
                 self.glassEffect(.regular.interactive(), in: .rect(cornerRadius: 7))
@@ -91,6 +115,10 @@ extension View {
             self.background(isSelected ? Color.accentColor.opacity(0.2) : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: 7))
         }
+        #else
+        self.background(isSelected ? Color.accentColor.opacity(0.2) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+        #endif
     }
 }
 
@@ -100,6 +128,7 @@ extension View {
     /// is gone; below 26 it stays that flat blue fill.
     @ViewBuilder
     func segmentSelection(isSelected: Bool) -> some View {
+        #if GLASS
         if #available(macOS 26.0, *) {
             if isSelected {
                 self.glassEffect(.regular.tint(Theme.accent).interactive(),
@@ -111,6 +140,10 @@ extension View {
             self.background(isSelected ? Theme.accent : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         }
+        #else
+        self.background(isSelected ? Theme.accent : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        #endif
     }
 }
 
