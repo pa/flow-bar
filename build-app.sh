@@ -124,6 +124,16 @@ cp "Resources/Info.plist" "${APP}/Contents/Info.plist"
 # Loose icns (Finder/Dock read this).
 cp "Resources/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
 
+# The changelog, whole.
+#
+# The same text GitHub publishes as release bodies, so the app can show what
+# changed with no network call and no second copy to drift. The WHOLE file, not
+# just the newest section: the history is the part you go looking for ("when did
+# the hotkey change?"), and the find bar can search all of it. 17 KB.
+if [ -f "CHANGELOG.md" ]; then
+    cp CHANGELOG.md "${APP}/Contents/Resources/release-notes.md"
+fi
+
 # Asset-catalog icon: Notification Center resolves the app icon from a compiled
 # Assets.car + CFBundleIconName, NOT the loose icns — without it the notification
 # left-icon is blank. Compiling needs Xcode's actool; on Command Line Tools-only

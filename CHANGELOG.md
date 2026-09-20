@@ -3,6 +3,99 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.5.0 — 2026-09-20
+
+A second way into flow-bar: **⌥Space opens a Spotlight-style palette** in the
+middle of your screen. The menubar popover is unchanged and still the
+mouse-driven half — the hotkey is for acting, the icon is for browsing.
+
+### Added
+
+- **A centered command palette (⌥Space).** One field, a ranked list, no rail
+  and no chrome. Type a few characters, press ↵, and you are in the task's
+  terminal tab without a window having been browsed. Empty query shows what you
+  are in the middle of: blocked sessions, then live ones, then in-progress work,
+  then commands.
+- **Ranking that earns the global list.** Exact → prefix → later-word prefix →
+  substring → scattered subsequence, with what you can *see* outranking what you
+  can't, so `fbn` finds `flow-bar-notch` and `flow notch` does too. Only slugs
+  match fuzzily; names, projects and tags match by substring, because a
+  scattered match in a sentence is an accident rather than an abbreviation.
+- **The palette navigates inside itself.** `→` enters a project, tag, owner,
+  playbook or list — a chip appears in the field, the field starts filtering
+  what you entered, `←` steps back out. It no longer bounces you into the
+  popover to look at something.
+- **Briefs read in the palette.** `→` on a task opens its brief and its update
+  notes; typing then finds within them, highlighting every match in place with
+  an editor's find bar — `3 of 12`, ↑↓ to step, wrapping.
+- **A jump list (⌘1…⌘9).** `⌘J` pins a task; pinned tasks lead the list,
+  numbered, and the numbers work from anywhere — three levels deep, mid-query.
+  Placed by you and never reordered, so `⌘2` is the same task tomorrow.
+- **`@` scopes the query to commands**, so the things you have to know the name
+  of are one character away.
+- **Multi-open in the palette.** `⌘↵` adds a task to a batch, `↵` opens the lot,
+  sharing the popover's selection so a batch built in one window is the same
+  batch in the other.
+- **Task rows carry their project, tags and status marks** — stale, waiting,
+  overdue, done, archived — in the popover's own glyphs and colours. Tags wrap
+  rather than truncate.
+- **The version in the footer links to its release notes** (this page).
+
+### The palette, in full
+
+Everything the panel does, since a key you don't know about doesn't exist.
+
+**Keys**
+
+| Key | What it does |
+| --- | --- |
+| `⌥Space` | Open or close the palette. Rebindable in Settings. |
+| `↑` `↓` | Move through the list. In a brief, step between find matches. |
+| `↵` | Open the selected task's terminal tab, or enter a project / tag / owner / playbook / list. With a selection, opens the whole batch. |
+| `⌥↵` | Open skipping permission prompts. Offered only when no session is running — on a live task `flow do` focuses the existing tab and the flag never reaches the harness. |
+| `→` | Go into the selected row: a task's brief, or a container's contents. Only from the end of what you have typed, so it doesn't steal a caret move. |
+| `←` | Step back out: clears the query first, then pops. Only from the start of the text. |
+| `⇥` | Same as `→`. |
+| `esc` | Unwinds one thing at a time: confirm → query → selection → route → close. |
+| `⌘J` | Pin or unpin the selected task to the jump list. |
+| `⌘1`–`⌘9` | Open a pinned task, from anywhere — mid-query, several levels deep. |
+| `⌘↵` | Add the selected task to a multi-open batch; `↵` then opens all of them. |
+| `@` | Scope the query to commands. Backspace it and you are back where you were. |
+
+**Commands** — type the name, or `@` to list them all
+
+| Command | Opens |
+| --- | --- |
+| Needs you | Blocked sessions, owner questions, overdue and waiting work |
+| In progress | Every task with a session |
+| Backlog | Work that hasn't started |
+| Overview | The metrics dashboard (in the menubar window) |
+| Projects · Playbooks · Owners · Tags | Each list, to enter and search |
+| Reminders | Your reminders |
+| New task… · New reminder… | The intake forms (in the menubar window) |
+| What's new | This changelog, searchable |
+| Refresh · Settings… | Reload, and preferences |
+
+**In a brief** — `→` on a task opens its brief and notes. Type to find within
+them: every match highlights in place, the bar counts them (`3 of 12`), `↑↓`
+steps and wraps. `↵` opens the task, `←` goes back.
+
+**On a row** — the slug leads, because it is what `flow do` takes. Under it,
+the project and `#tags`. On the right, the same marks the menubar window uses:
+a green dot for a running session, an orange hand for one stopped waiting on
+you, plus overdue, waiting, stale, done and archived.
+
+### Changed
+
+- **The global hotkey is ⌥Space** (was ⌥⌘F). Settings still rebinds it.
+- **Skip-permission prompts is only offered where it can do anything.** On a
+  task whose session is already running, `flow do` focuses the existing tab and
+  returns before building a command line, so the flag never reaches the harness;
+  the option is hidden there and the row's tooltip says why.
+- **The popover has no search section.** Search is the palette's job now; a
+  second search surface inside the browsing window was a second front door to
+  the same room.
+
 ## v0.4.3 — 2026-09-17
 
 ### Fixed
