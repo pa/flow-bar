@@ -1,3 +1,4 @@
+import FlowBarCore
 import Foundation
 
 /// Build-time facts stamped into Info.plist by `build-app.sh`.
@@ -30,6 +31,36 @@ enum AppInfo {
 
     static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0-dev"
+    }
+
+    /// This build's release notes — the top CHANGELOG section, written into the
+    /// bundle by `build-app.sh`.
+    ///
+    /// Nil for a `swift run` build, which has no bundle to read from: the notes
+    /// are a property of a *packaged* app, and inventing them from the repo at
+    /// runtime would describe a version that is not what is running.
+    /// The bundled changelog, whole.
+    static var changelog: String? {
+        guard let url = Bundle.main.url(forResource: "release-notes", withExtension: "md"),
+              let text = try? String(contentsOf: url, encoding: .utf8),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return text
+    }
+
+    /// The newest section — what this build's release announced.
+    static var releaseNotesSection: ReleaseNotes.Section? {
+        changelog.flatMap { ReleaseNotes.top(of: $0) }
+    }
+
+    /// Whether the bundled notes actually describe the running build.
+    ///
+    /// They are produced by two independent steps — `build-app.sh` stamps the
+    /// version, and a human writes the changelog entry — so they can disagree,
+    /// and the failure is silent: the app would announce "What's new in v0.5.0"
+    /// and then show v0.4.3's notes. Announcing is gated on them matching.
+    static var releaseNotesMatchBuild: Bool {
+        releaseNotesSection?.version == version
     }
 
     /// True when Homebrew owns this install and the in-app updater must stand down.

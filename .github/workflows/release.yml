@@ -33,6 +33,22 @@ jobs:
           swift --version
           echo "SDK: $(xcrun --show-sdk-version)"
 
+      # The tag, the cask and the changelog are edited by hand in three places
+      # and nothing makes them agree. When they don't, the release ships notes
+      # describing a different version than the one being installed — and every
+      # part of it still "works", so nobody finds out. Fail before building.
+      - name: Tag, cask and changelog agree
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          cask="$(sed -n 's/^  version "\(.*\)"/\1/p' Casks/flow-bar.rb)"
+          notes="$(awk '/^## /{ line=$0; sub(/^## /,"",line); split(line,a,/[ \t]/); v=a[1]; sub(/^v/,"",v); print v; exit }' CHANGELOG.md)"
+          echo "tag=$tag cask=$cask changelog=$notes"
+          fail=0
+          [ "$cask" = "$tag" ] || { echo "::error::Casks/flow-bar.rb says $cask, tag says $tag"; fail=1; }
+          [ "$notes" = "$tag" ] || { echo "::error::CHANGELOG.md's newest section is $notes, tag says $tag"; fail=1; }
+          exit $fail
+
       - name: Run tests
         run: swift run flowbar-tests
 

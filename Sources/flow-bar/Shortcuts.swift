@@ -3,18 +3,21 @@ import Carbon.HIToolbox
 import SwiftUI
 
 /// A global keyboard shortcut: a key code + Carbon modifier mask, plus a
-/// human-readable label (e.g. "⌥⌘F"). Persisted in UserDefaults.
+/// human-readable label (e.g. "⌥Space"). Persisted in UserDefaults.
 struct Shortcut: Equatable, Codable {
     var keyCode: UInt32
     var carbonModifiers: UInt32
     var display: String
 
     static let key = "toggleShortcut"
-    /// Default: ⌥⌘F.
+    /// Default: **⌥Space** — one chord, next to the other launchers people
+    /// already reach for (⌘Space, ⌃Space), and reachable without moving your
+    /// hand off the home row. Only a default: `ShortcutRecorder` in Settings
+    /// rebinds it, and anything already saved there wins.
     static let defaultShortcut = Shortcut(
-        keyCode: UInt32(kVK_ANSI_F),
-        carbonModifiers: UInt32(cmdKey | optionKey),
-        display: "⌥⌘F")
+        keyCode: UInt32(kVK_Space),
+        carbonModifiers: UInt32(optionKey),
+        display: "⌥Space")
 
     static func load() -> Shortcut {
         guard let data = UserDefaults.standard.data(forKey: key),
@@ -109,6 +112,26 @@ struct ShortcutRecorder: NSViewRepresentable {
         }
         required init?(coder: NSCoder) { fatalError() }
 
+        /// A readable name for the key.
+        ///
+        /// `charactersIgnoringModifiers` gives " " for Space and control
+        /// characters for Return/Tab/Escape, so a recorded ⌥Space would render
+        /// as "⌥ " — a shortcut you cannot read is a shortcut you cannot check.
+        static func keyName(_ event: NSEvent) -> String {
+            switch Int(event.keyCode) {
+            case kVK_Space:       return "Space"
+            case kVK_Return:      return "Return"
+            case kVK_Tab:         return "Tab"
+            case kVK_Escape:      return "Esc"
+            case kVK_LeftArrow:   return "←"
+            case kVK_RightArrow:  return "→"
+            case kVK_UpArrow:     return "↑"
+            case kVK_DownArrow:   return "↓"
+            default:
+                return (event.charactersIgnoringModifiers ?? "").uppercased()
+            }
+        }
+
         @objc private func begin() { recording = true; window?.makeFirstResponder(self) }
         override var acceptsFirstResponder: Bool { true }
 
@@ -122,7 +145,7 @@ struct ShortcutRecorder: NSViewRepresentable {
             if mods.contains(.control) { carbon |= UInt32(controlKey) }
             if mods.contains(.shift)   { carbon |= UInt32(shiftKey) }
             guard carbon != 0 else { NSSound.beep(); return }   // require a modifier
-            let key = (event.charactersIgnoringModifiers ?? "").uppercased()
+            let key = Self.keyName(event)
             let s = Shortcut(keyCode: UInt32(event.keyCode), carbonModifiers: carbon,
                              display: shortcutDisplay(mods, key: key))
             shortcut = s

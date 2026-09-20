@@ -375,7 +375,7 @@ T.test("reminders sort by fire time") {
     let b = Reminder(title: "b", fireDate: base.addingTimeInterval(100))
     let c = Reminder(title: "c", fireDate: base.addingTimeInterval(200))
     let sorted = [a, b, c].sortedByFire()
-    T.equal(sorted.map(\.title), ["b", "c", "a"], "earliest first")
+    T.equal(sorted.map { $0.title }, ["b", "c", "a"], "earliest first")
 }
 
 
@@ -416,7 +416,7 @@ T.test("Completed bucket is newest-completed first") {
     var newer = Reminder(id: UUID(), title: "newer", note: nil, fireDate: now, createdAt: now)
     older.completedAt = now.addingTimeInterval(-600)
     newer.completedAt = now
-    T.equal([older, newer].group(now: now).completed.map(\.title), ["newer", "older"],
+    T.equal([older, newer].group(now: now).completed.map { $0.title }, ["newer", "older"],
             "most recently completed first")
 }
 
@@ -485,7 +485,7 @@ T.test("flattened ids are unique so cells can't be reused across buckets") {
     done.completedAt = now
     let live = Reminder(id: UUID(), title: "b", note: nil,
                         fireDate: now.addingTimeInterval(86_400), createdAt: now)
-    let ids = [done, live].group(now: now).flattened().map(\.id)
+    let ids = [done, live].group(now: now).flattened().map { $0.id }
     T.equal(ids.count, Set(ids).count, "no duplicate ids in the rendered list")
     T.expect(ids.contains(live.id.uuidString), "a reminder's id is its UUID (scrollTo still works)")
 }
@@ -780,7 +780,7 @@ T.test("parallel tool calls resolve out of order and age from the oldest") {
     p.consume(object: toolUse("a", "Read", "2026-09-15T15:20:00.000Z"))
     p.consume(object: toolUse("b", "Grep", "2026-09-15T15:20:01.000Z"))
     p.consume(object: toolResult("a", "2026-09-15T15:20:01.500Z"))
-    T.equal(p.pending.map(\.id), ["b"], "only b outstanding")
+    T.equal(p.pending.map { $0.id }, ["b"], "only b outstanding")
     // The badge must age from the oldest SURVIVING call, not the oldest ever.
     T.equal(p.activity(now: at(8)), .working(tool: "Grep", since: at(1)),
             "b is only 7s old, so still working")
@@ -1528,5 +1528,676 @@ T.equal(FlowClient.doTaskArgs("flow-bar-attention"),
 T.equal(FlowClient.doTaskArgs("flow-bar-attention", skipPermissions: true),
         ["do", "flow-bar-attention", "--dangerously-skip-permissions"],
         "⌥-click asks flow to skip permission prompts")
+
+// MARK: - Palette
+
+print("\nPaletteMatcher")
+
+func pitem(_ title: String, subtitle: String? = nil, keywords: [String] = [],
+           kind: PaletteKind = .task, rank: Int = 0) -> PaletteItem {
+    PaletteItem(id: "\(kind.rawValue):\(title)", kind: kind, title: title,
+                subtitle: subtitle, keywords: keywords,
+                action: .openTask(title), rank: rank)
+}
+func mscore(_ q: String, _ item: PaletteItem) -> Int? {
+    PaletteMatcher.match(query: q, item: item)?.score
+}
+
+// The ladder, best to worst. Written as one chain rather than five asserted
+// constants: the absolute numbers are free to move, the ORDER is the contract.
+do {
+    let exact     = mscore("bar", pitem("bar"))
+    let prefix    = mscore("bar", pitem("bar-chart"))
+    let wordStart = mscore("bar", pitem("flow-bar"))
+    let contains  = mscore("bar", pitem("flowbarx"))
+    let fuzzy     = mscore("bar", pitem("b-a-r"))
+    T.expect([exact, prefix, wordStart, contains, fuzzy].allSatisfy { $0 != nil },
+             "every rung of the ladder matches")
+    T.expect(exact! > prefix!, "exact beats prefix")
+    T.expect(prefix! > wordStart!, "prefix beats a later word's prefix")
+    T.expect(wordStart! > contains!, "a word start beats a mid-word substring")
+    T.expect(contains! > fuzzy!, "a substring beats a scattered subsequence")
+}
+
+// Field weights sit above match quality: what you can SEE outranks what you
+// can't. A fuzzy hit on the title beats an exact hit on an invisible keyword.
+T.expect(mscore("bar", pitem("b-a-r"))! > mscore("bar", pitem("zzz", keywords: ["bar"]))!,
+         "a title subsequence beats a keyword exact match")
+T.expect(mscore("notch", pitem("zzz", subtitle: "notch"))!
+             > mscore("notch", pitem("zzz", keywords: ["notch"]))!,
+         "subtitle outranks keyword")
+
+// Keywords are not displayed, so a fuzzy hit on one produces a row with
+// nothing in it resembling what you typed. They match on substrings only.
+T.expect(PaletteMatcher.match(query: "bar", item: pitem("zzz", keywords: ["banana-republic"])) == nil,
+         "keywords do not fuzzy-match (b-a-r is in banana-republic)")
+T.expect(mscore("republic", pitem("zzz", keywords: ["banana-republic"])) != nil,
+         "…but a keyword substring still matches")
+
+// A space is AND across fields — this is what makes "flow notch" work, where
+// neither substring nor subsequence survives the gap.
+T.expect(mscore("flow notch", pitem("flow-bar-notch")) != nil, "every token must hit")
+T.expect(mscore("flow zzz", pitem("flow-bar-notch")) == nil, "one missed token fails the item")
+T.expect(mscore("flow notch", pitem("flow-bar-notch"))! > mscore("flow", pitem("flow-bar-notch"))!,
+         "two hits score above one")
+T.expect(mscore("", pitem("flow-bar")) == nil, "an empty query matches nothing")
+T.expect(mscore("flow-bar-notch-extra", pitem("flow-bar")) == nil, "query longer than the title")
+
+// Highlights are offsets into the title, so the UI can bold the hit.
+T.equal(PaletteMatcher.match(query: "notch", item: pitem("flow-bar-notch"))?.titleOffsets,
+        [9, 10, 11, 12, 13], "title offsets mark the matched run")
+T.equal(PaletteMatcher.match(query: "notch", item: pitem("zzz", keywords: ["notch"]))?.titleOffsets,
+        [], "a keyword hit highlights nothing — there is nothing visible to mark")
+T.equal(PaletteMatcher.match(query: "flow notch", item: pitem("flow-bar-notch"))?.titleOffsets,
+        [0, 1, 2, 3, 9, 10, 11, 12, 13], "both tokens highlight, merged and sorted")
+
+print("\nPaletteIndex")
+
+let pTasks = [
+    task("flow-bar-notch", name: "flow-bar: session alerts", status: "in-progress",
+         priority: "medium", project: "flow-bar", live: true, tags: ["swift"]),
+    task("tessera-app", name: "tessera-app", status: "in-progress", priority: "medium",
+         project: "tessera", live: true),
+    task("meymai-push-backlog", name: "Push the backlog", status: "in-progress",
+         priority: "high", project: "meymai", stale: true),
+    task("side-quest-docs", name: "Write the docs", status: "in-progress", priority: "low"),
+    task("pa-homepage-copy", name: "Rewrite the copy", status: "backlog", priority: "low"),
+    task("frammer-eol", name: "Retire EoL packages", status: "done", priority: "low"),
+]
+let pIndex = PaletteIndex.build(
+    tasks: pTasks,
+    projects: [Project(slug: "flow-bar", name: "flow-bar", priority: "high",
+                       status: "active", total: 3, inProgress: 1, backlog: 0, done: 2,
+                       updated: nil)],
+    playbooks: [Playbook(slug: "ms-update", project: "meymai")],
+    owners: [Owner(slug: "repo-keeper", status: "active", every: "3h",
+                   nextTick: nil, nextTickRelative: "in 1h59m")],
+    tags: [TagCount(tag: "swift", count: 2)],
+    blocked: ["meymai-push-backlog"])
+
+// The first row is what Enter hits, so an exact slug can never come second.
+T.equal(pIndex.search("flow-bar-notch").first?.id, "task:flow-bar-notch",
+        "an exact slug leads the results")
+T.equal(pIndex.search("fbn").first?.id, "task:flow-bar-notch",
+        "initials find the task — the whole point of ranking over contains()")
+T.equal(pIndex.search("tessera").first?.id, "task:tessera-app", "a plain prefix")
+T.equal(pIndex.search("swift").first?.id, "tag:swift",
+        "a tag is findable by its bare name, without the #")
+
+// Both found by running the index against real data, not by reasoning about it.
+do {
+    // "flow" prefix-matches the project `flow-bar` and the task
+    // `flow-bar-notch` equally well; the project's title is merely shorter.
+    // The row whose Enter actually opens something wins that argument.
+    let r = pIndex.search("flow")
+    T.equal(r.first?.kind, .task, "a task leads an equally-good project match")
+    T.expect(r.flat.contains { $0.id == "project:flow-bar" }, "the project is still there")
+    // …but the bias is far smaller than a rung, so a genuinely better match
+    // still wins: an exact project name beats a task that merely starts with it.
+    let exactly = PaletteIndex.build(
+        tasks: [task("flow-bar-notch", status: "in-progress")],
+        projects: [Project(slug: "flow-bar", name: "flow-bar", priority: "high",
+                           status: "active", total: 1, inProgress: 1, backlog: 0,
+                           done: 0, updated: nil)])
+    T.equal(exactly.search("flow-bar").first?.kind, .project,
+            "an exact match still outranks a task — the thumb is not a fist")
+}
+
+// A subtitle is a sentence, so fuzzy-matching it finds accidents. Real case:
+// "palette" was pulling in a task named "…playbook parity, done lists, honest
+// badges", which carries p-a-l-e-t-t-e scattered across three words.
+do {
+    let noise = pitem("zzz", subtitle: "playbook parity, done lists, honest badges")
+    T.expect(PaletteMatcher.match(query: "palette", item: noise) == nil,
+             "a subtitle does not fuzzy-match")
+    T.expect(mscore("parity", noise) != nil, "…but a substring of it still does")
+    T.expect(mscore("fbn", pitem("flow-bar-notch")) != nil,
+             "the title keeps fuzzy matching — that is what initials need")
+}
+
+// Sections follow their best member, so the leading group is whichever kind
+// won — a command can outrank every task and say so with its header.
+do {
+    let r = PaletteIndex.build(tasks: [task("review-needs-triage", status: "in-progress")])
+        .search("needs")
+    T.equal(r.sections.first?.title, "Commands", "the best match's kind leads")
+    T.equal(r.first?.id, "cmd:inbox", "…and it is the first row")
+}
+
+// The cursor is an index into `flat`, so `flat` must be exactly what is drawn.
+do {
+    let r = pIndex.search("a")
+    T.equal(r.flat.count, r.count, "flat and count agree")
+    T.equal(r.flat.map { $0.id }, r.sections.flatMap { $0.items.map { $0.id } },
+            "flat is the sections concatenated, in display order")
+    T.expect(r.sections.allSatisfy { !$0.items.isEmpty }, "no empty section headers")
+}
+
+// Typing the word in your head when the icon is orange must land on the work,
+// not on the section that lists it.
+do {
+    let r = pIndex.search("blocked")
+    // Needs-you leads, and that is the field-weight rule keeping its promise
+    // rather than an accident: its subtitle *says* "Blocked sessions", where
+    // the task's only claim to the word is an invisible keyword. The explicable
+    // row wins. The task is still right behind it, which it would not be
+    // without that keyword — no field of a blocked task contains "blocked".
+    T.equal(r.first?.id, "cmd:inbox", "the row that visibly says 'Blocked' leads")
+    T.equal(r.sections.first { $0.title == "Tasks" }?.items.first?.id,
+            "task:meymai-push-backlog", "and the blocked task is the top task")
+    T.expect(PaletteMatcher.match(query: "blocked", item: pitem("meymai-push-backlog")) == nil,
+             "…which nothing but the keyword could have achieved")
+}
+
+// Equal scores break toward what you can actually open.
+do {
+    let idx = PaletteIndex.build(tasks: [
+        task("alpha-one", status: "done", priority: "medium"),
+        task("alpha-two", status: "in-progress", priority: "medium", live: true),
+    ])
+    T.equal(idx.search("alpha").first?.id, "task:alpha-two",
+            "a live session outranks a done task at the same score, alphabetical order be damned")
+}
+
+// Badges are what make the list readable without reading it — and they are the
+// SAME marks the popover uses, so nothing has to be learned twice.
+do {
+    func badges(_ id: String) -> [PaletteBadge] {
+        pIndex.items.first { $0.id == id }?.badges ?? []
+    }
+    T.equal(badges("task:flow-bar-notch"), [.live], "a live session shows a dot")
+    T.expect(badges("task:meymai-push-backlog").contains(.blocked),
+             "blocked outranks live — the hand, not the dot")
+    T.expect(!badges("task:meymai-push-backlog").contains(.live),
+             "…and replaces it, rather than sitting beside it")
+    T.expect(badges("task:meymai-push-backlog").contains(.stale(nil)), "stale is carried over")
+    T.equal(badges("task:pa-homepage-copy"), [], "backlog work is unremarkable")
+    T.equal(badges("cmd:inbox"), [], "a command is not a session")
+
+    // `flow do` focuses a running tab and returns before it builds a command
+    // line, so --dangerously-skip-permissions never reaches the harness there.
+    // The panel only offers it where it can do something.
+    func item(_ id: String) -> PaletteItem? { pIndex.items.first { $0.id == id } }
+    T.expect(item("task:flow-bar-notch")?.hasLiveSession == true,
+             "a live task has a running session")
+    T.expect(item("task:meymai-push-backlog")?.hasLiveSession == true,
+             "…and so does a blocked one — blocked IS live, stopped to ask you something")
+    T.expect(item("task:pa-homepage-copy")?.hasLiveSession == false,
+             "a backlog task has no session, so skipping prompts means something")
+    T.expect(item("cmd:settings")?.hasLiveSession == false, "a command has no session")
+
+    // Order is what stops you first, then what is merely late.
+    // A due badge needs a LABEL, not just a date — same rule as TaskRow, which
+    // renders flow's own wording rather than formatting the date itself.
+    let dated = FlowTask(slug: "x", name: "X", status: "in-progress", priority: "medium",
+                         stale: true, waitingOn: "review", live: true,
+                         dueInDays: -2, dueLabel: "overdue 2d")
+    let busy = PaletteIndex.build(tasks: [dated], commands: []).items[0]
+    T.equal(busy.badges.last, PaletteBadge.live,
+            "the quiet live dot sits last, nearest the edge")
+    T.equal(busy.badges.first, PaletteBadge.due("overdue 2d", overdue: true),
+            "what is late comes first")
+    T.expect(busy.badges.contains(PaletteBadge.waiting("review")),
+             "the waiting note rides along for the tooltip")
+    T.expect(PaletteIndex.build(tasks: [task("y", status: "in-progress", dueInDays: -2)],
+                                commands: []).items[0].badges.isEmpty,
+             "a due date with no label from flow shows nothing rather than a guess")
+}
+
+// Done and archived tasks stay searchable — they are just never on home.
+T.expect(pIndex.search("frammer").first?.id == "task:frammer-eol", "a done task is findable")
+
+// A half-filled index is a legal one: the reads land one at a time.
+do {
+    let empty = PaletteIndex.build()
+    T.expect(!empty.search("needs").isEmpty, "commands alone still search")
+    T.expect(empty.search("flow-bar-notch").isEmpty, "…and nothing is invented")
+    T.expect(PaletteIndex.build(tasks: pTasks).search("tessera").first != nil,
+             "tasks alone still search")
+}
+
+// A wide query cannot flood the list.
+do {
+    let many = (1...100).map { task("t-\($0)", status: "in-progress") }
+    T.equal(PaletteIndex.build(tasks: many).search("t", limit: 5).count, 5, "limit is honoured")
+}
+
+print("\nPaletteRoute")
+
+// The palette holds its own navigation, so a container's ↵ must resolve to a
+// route rather than to a hand-off. Anything that returns nil here is something
+// the panel genuinely cannot do alone.
+T.equal(PaletteAction.openProject("flow-bar").route, .project("flow-bar"), "a project is entered")
+T.equal(PaletteAction.openTag("swift").route, .tag("swift"), "a tag is entered")
+T.equal(PaletteAction.openPlaybook("ms-update").route, .playbook("ms-update"), "a playbook is entered")
+T.equal(PaletteAction.openOwner("repo-keeper").route, .owner("repo-keeper"), "an owner is entered")
+T.expect(PaletteAction.openTask("x").route == nil,
+         "a task's ↵ opens its tab — that is the app, not navigation")
+T.expect(PaletteAction.newTask.route == nil, "intake needs a form the panel doesn't have")
+T.expect(PaletteAction.settings.route == nil, "Settings is a window")
+// Release notes are a document, and the palette already reads documents.
+T.equal(PaletteAction.releaseNotes.route, .releaseNotes, "notes open in the palette")
+T.expect(PaletteRoute.releaseNotes.isDetail, "…through the same reader a brief uses")
+
+// Surfaced once, above everything, and only when there is something unread.
+do {
+    let announced = PaletteIndex.build(tasks: [task("a", status: "in-progress", live: true)],
+                                       unreadRelease: "0.5.0").search("")
+    T.equal(announced.sections.first?.title, "New in this version", "it leads the home list")
+    T.equal(announced.first?.title, "What's new in v0.5.0", "and names the version")
+    T.equal(announced.first?.action, .releaseNotes, "opening it reads them")
+
+    let quiet = PaletteIndex.build(tasks: [task("a", status: "in-progress", live: true)]).search("")
+    T.expect(quiet.sections.contains { $0.title == "New in this version" } == false,
+             "nothing unread, nothing announced")
+    // …but it is always reachable deliberately, banner or not.
+    T.equal(PaletteIndex.build().search("@whats new").first?.id, "cmd:whats-new",
+            "and it is a command you can just ask for")
+    T.equal(PaletteIndex.build().search("@changelog").first?.id, "cmd:whats-new", "by that name too")
+}
+
+// The rail names panes; the palette names lists. The mapping is the only place
+// those two vocabularies meet.
+T.equal(PaletteAction.section("inbox").route, .list(.needsYou), "inbox is the needs-you list")
+T.equal(PaletteAction.section("tasks").route, .list(.inProgress), "tasks is the in-progress list")
+T.equal(PaletteAction.section("tags").route, .list(.tags), "tags maps straight through")
+// Backlog is a filter on the Tasks pane in the popover, but a list of its own
+// in the palette — which is all this vocabulary needs it to be.
+T.equal(PaletteAction.section("backlog").route, .list(.backlog), "backlog is a list here")
+T.equal(PaletteListKind.backlog.title, "Backlog", "and it names itself")
+T.expect(PaletteCommands.all.contains { $0.id == "cmd:backlog" }, "reachable as a command")
+T.equal(PaletteIndex.build().search("@backlog").first?.id, "cmd:backlog",
+        "…and found by @, or by the words you would actually type")
+T.equal(PaletteIndex.build().search("@todo").first?.id, "cmd:backlog", "todo")
+T.equal(PaletteIndex.build().search("@later").first?.id, "cmd:backlog", "later")
+T.expect(PaletteAction.section("dashboard").route == nil,
+         "a grid of tiles is not a list — Overview still opens the popover")
+T.expect(PaletteAction.section("search").route == nil, "the root is not a destination")
+T.expect(PaletteAction.section("nonsense").route == nil, "an unknown section navigates nowhere")
+
+// Tab expands a row; for a task that means its brief, which ↵ cannot mean.
+do {
+    let index = PaletteIndex.build(tasks: [task("flow-bar-notch", status: "in-progress")],
+                                   projects: [Project(slug: "flow-bar", name: "flow-bar",
+                                                      priority: "high", status: "active",
+                                                      total: 1, inProgress: 1, backlog: 0,
+                                                      done: 0, updated: nil)])
+    let taskRow = index.items.first { $0.id == "task:flow-bar-notch" }!
+    T.equal(taskRow.detailRoute, .task("flow-bar-notch"), "Tab on a task opens its brief")
+    T.expect(!taskRow.entersOnPrimary, "…but ↵ still opens the tab")
+    let projectRow = index.items.first { $0.id == "project:flow-bar" }!
+    T.equal(projectRow.detailRoute, .project("flow-bar"), "a container expands into itself")
+    T.expect(projectRow.entersOnPrimary, "…which is also what ↵ does to it")
+}
+
+T.equal(PaletteRoute.tag("swift").chip, "#swift", "a tag chip keeps its hash")
+T.equal(PaletteRoute.list(.needsYou).chip, "Needs you", "a list chip reads as its title")
+T.equal(PaletteRoute.task("x").chip, "x", "a task chip is its slug")
+T.expect(PaletteRoute.task("x").isDetail, "a task renders a document")
+T.expect(!PaletteRoute.project("x").isDetail, "a project renders a list")
+
+print("\nPalette row facts")
+
+// A row you can only FIND by a fact you cannot SEE looks arbitrary — so the
+// project and tags that feed the keywords are carried for display too.
+do {
+    let item = PaletteIndex.build(
+        tasks: [task("flow-bar-notch", name: "notch", status: "in-progress",
+                     project: "flow-bar", tags: ["swift", "ui"])],
+        commands: []).items[0]
+    // The name is off the row — it crowded out the project and tags you scan
+    // by — but it must still be findable, so it moves into the keywords.
+    T.expect(item.subtitle == nil, "a task row carries no name")
+    T.expect(item.keywords.contains("notch"), "…but the name is still searchable")
+    T.equal(item.project, "flow-bar", "the project is shown, not just searched")
+    T.equal(item.tags, ["swift", "ui"], "and so are the tags")
+    T.expect(item.keywords.contains("flow-bar"), "…while still feeding the matcher")
+    T.expect(item.keywords.contains("swift"), "…both of them")
+}
+do {
+    let floating = PaletteIndex.build(
+        tasks: [task("solo", status: "backlog")], commands: []).items[0]
+    T.expect(floating.project == nil, "a floating task claims no project")
+    T.expect(floating.tags.isEmpty, "and no tags")
+}
+
+// Opening a batch is an action like any other, so one place decides what a
+// result does — the panel and the popover cannot drift on it.
+T.expect(PaletteAction.openBatch(["a", "b"]).route == nil,
+         "a batch acts on the world; it does not navigate")
+
+print("\nJumpList")
+
+// The list is placed by you and stays put — that stability is the feature.
+do {
+    var jump = JumpList()
+    T.equal(jump.toggle("flow-bar-notch"), .added(1), "the first pin is ⌘1")
+    T.equal(jump.toggle("tessera-app"), .added(2), "the second is ⌘2")
+    T.equal(jump.number(of: "tessera-app"), 2, "and it keeps that number")
+    T.equal(jump.slug(at: 1), "flow-bar-notch", "a number resolves to its task")
+    T.expect(jump.slug(at: 3) == nil, "…and an unused one to nothing")
+    T.expect(jump.contains("tessera-app"), "contains")
+
+    // Pinning again unpins: one key, both directions.
+    T.equal(jump.toggle("flow-bar-notch"), .removed, "toggling a pinned task removes it")
+    T.equal(jump.number(of: "tessera-app"), 1,
+            "removal renumbers what follows — better than a ⌘2 that does nothing")
+    T.expect(!jump.contains("flow-bar-notch"), "and it is gone")
+}
+
+// Nine, because the keys run out — and a jump list you have to search is the
+// search you already had.
+do {
+    var jump = JumpList()
+    for i in 1...JumpList.capacity { T.equal(jump.toggle("t-\(i)"), .added(i), "fills to capacity") }
+    T.expect(jump.isFull, "full")
+    T.equal(jump.toggle("t-10"), .full, "the tenth is refused, not silently dropped")
+    T.equal(jump.slugs.count, JumpList.capacity, "…and nothing was evicted to make room")
+}
+
+// A persisted list can carry junk from an older build or a hand edit.
+T.equal(JumpList(["a", "b", "a"]).slugs, ["a", "b"], "duplicates collapse")
+T.equal(JumpList((1...20).map { "t-\($0)" }).slugs.count, 9, "overflow is trimmed")
+
+// A pinned task can be deleted out from under the list; a number that opens
+// nothing is worse than one fewer number.
+T.equal(JumpList(["a", "gone", "b"]).pruned(to: ["a", "b"]).slugs, ["a", "b"],
+        "vanished tasks are pruned")
+T.equal(JumpList(["a", "gone", "b"]).pruned(to: ["a", "b"]).number(of: "b"), 2, "and renumbered")
+
+// On the home list it leads, in pin order — sorting it would destroy the
+// muscle memory that makes ⌘2 worth having.
+do {
+    let index = PaletteIndex.build(
+        tasks: [task("zeta", status: "in-progress", live: true),
+                task("alpha", status: "in-progress")],
+        jumpList: JumpList(["zeta", "alpha"]))
+    let home = index.search("")
+    T.equal(home.sections.first?.title, "Jump list", "it leads the home list")
+    T.equal(home.sections.first?.items.map { $0.title }, ["zeta", "alpha"],
+            "in pin order, not sorted")
+    T.equal(home.sections.first?.items.first?.jumpNumber, 1, "carrying its number")
+    T.expect(!home.sections.contains { $0.title == "Live sessions" },
+             "a pinned task is not also listed below — it appears once")
+    // A number travels with the task wherever it shows up, including a search.
+    T.equal(index.search("alpha").first?.jumpNumber, 2, "the number shows in search results too")
+}
+T.expect(PaletteIndex.build(tasks: [task("a", status: "in-progress")]).search("")
+            .sections.contains { $0.title == "Jump list" } == false,
+         "no pins, no section")
+
+print("\nPalette sigils")
+
+// `@` scopes the list to commands rather than pushing anywhere, so backspacing
+// it puts you back exactly where you were.
+T.equal(PaletteQuery.parse("@").scope, .command, "a leading @ scopes to commands")
+T.equal(PaletteQuery.parse("@set").text, "set", "…and is read off the query")
+T.expect(PaletteQuery.parse("set").scope == nil, "no sigil, no scope")
+T.expect(PaletteQuery.parse("user@example").scope == nil,
+         "an @ inside a word is part of the word")
+T.expect(PaletteQuery.parse("").scope == nil, "an empty query has no sigil")
+T.equal(PaletteQuery.parse("@").chip, "Commands", "the scope names itself in the field")
+
+do {
+    // A bare sigil lists everything it scopes to.
+    let all = pIndex.search("@")
+    T.equal(all.sections.map { $0.title }, ["Commands"], "one group")
+    T.equal(all.count, PaletteCommands.all.count, "every command, none of the tasks")
+    T.expect(all.flat.allSatisfy { $0.kind == .command }, "nothing but commands")
+
+    // …and typing after it filters only those.
+    T.equal(pIndex.search("@set").first?.id, "cmd:settings", "the sigil's query still ranks")
+    T.expect(pIndex.search("@flow-bar-notch").isEmpty,
+             "a task cannot be found from inside the command scope")
+    // Without the sigil the same query is dominated by the work, as it should be.
+    T.equal(pIndex.search("flow-bar-notch").first?.kind, .task, "unscoped, the task wins")
+}
+
+// A sigil the index cannot honour is just a character. Inside a route there are
+// no commands, so `@` has to search rather than blank the list.
+do {
+    let route = PaletteIndex.of(PaletteIndex.build(
+        tasks: [task("a-task", status: "in-progress"), task("at-home", status: "backlog")],
+        commands: []).items)
+    T.equal(route.search("@at").first?.title, "at-home",
+            "the sigil is dropped and its text searched")
+    T.expect(route.search("@").isEmpty, "a bare @ with nothing to scope to shows nothing")
+}
+
+print("\nPalette listing")
+
+// Inside a route an empty query means "all of it", not the root's home list.
+do {
+    let index = PaletteIndex.of(PaletteIndex.build(
+        tasks: [task("b-task", status: "backlog"),
+                task("a-task", status: "in-progress", live: true)],
+        commands: []).items)
+    let r = index.listing(title: "Tasks")
+    T.equal(r.sections.map { $0.title }, ["Tasks"], "one group, named by the route")
+    T.equal(r.flat.map { $0.title }, ["a-task", "b-task"],
+            "live work first, not alphabetical")
+    T.expect(!r.flat.contains { $0.kind == .command }, "no commands inside a route")
+    // …and typing still ranks, on the route's rows only.
+    T.equal(index.search("b-task").first?.title, "b-task", "the field filters the route")
+    T.expect(index.search("settings").isEmpty, "the root's commands are not reachable from here")
+}
+
+// A playbook run is a task: its row opens a tab like any other.
+do {
+    let items = PaletteIndex.runItems([
+        PlaybookRun(slug: "ms-update--2026-09-16-06-41", status: "done", playbook: "ms-update"),
+        PlaybookRun(slug: "ms-update--2026-09-18-11-02", status: "in-progress", playbook: "ms-update"),
+    ])
+    T.equal(items.first?.action, .openTask("ms-update--2026-09-16-06-41"), "a run opens its tab")
+    T.equal(PaletteIndex.of(items).listing(title: "Runs").flat.first?.title,
+            "ms-update--2026-09-18-11-02", "a running run leads")
+    // A run belongs to its playbook the way a task belongs to a project.
+    T.expect(items.first?.subtitle == nil, "a run row carries no name either")
+    T.equal(items.first?.project, "ms-update", "it reads with the same folder glyph")
+}
+
+print("\nDocumentSearch")
+
+let briefText = """
+Search-first popover
+
+Why
+Search is what the app is actually for — you open it to get to one task.
+The rail-first root makes you pick a section before you can look for anything.
+
+Done when
+⌥⌘F lands on a search root with the field focused.
+One query ranks across tasks, projects and commands.
+The matcher is covered in the harness.
+"""
+
+/// The characters a query lights up, as text — the thing the eye will see.
+func lit(_ query: String, _ text: String) -> [String] {
+    let offsets = DocumentSearch.matchOffsets(query, in: text)
+    let chars = Array(text)
+    return DocumentSearch.runs(offsets).map { String(chars[$0.lowerBound..<$0.upperBound]) }
+}
+
+// A find lights up what you typed, where it is.
+T.equal(lit("rail", briefText), ["rail"], "the word, highlighted in place")
+T.equal(lit("SEARCH", briefText).count, 3, "case doesn't matter; every occurrence lights")
+T.expect(lit("search", briefText).allSatisfy { $0.lowercased() == "search" },
+         "…and only the word itself")
+
+// Fuzzy, but only when the match is compact — the rule that makes a
+// subsequence honest in prose.
+T.equal(lit("matchr", briefText), ["matcher"], "a near-miss still finds the word it meant")
+T.expect(lit("scrap", briefText).isEmpty, "letters strewn across a sentence are not a match")
+// The measured case that forced the limit down: at 3n, "rail" matched
+// "Ranking is a ladder" across fourteen characters.
+T.expect(lit("rail", "Ranking is a ladder with field weights on top.").isEmpty,
+         "a match spread across a sentence is noise, not a near-miss")
+T.equal(DocumentSearch.spanLimit(for: "abc"), 7, "the span a 3-char query may stretch")
+
+// Two words narrow the document: both must be on one line.
+T.expect(!DocumentSearch.matchOffsets("query ranks", in: briefText).isEmpty, "AND within a line")
+T.expect(DocumentSearch.matchOffsets("query harness", in: briefText).isEmpty,
+         "two words from different lines are not a match")
+
+// Runs, not letters — one highlight per word is what a text system wants.
+T.equal(DocumentSearch.runs([2, 3, 4, 9, 10]), [2..<5, 9..<11], "far-apart offsets stay separate")
+// A fuzzy match has holes by definition; leaving one letter dark in the middle
+// of a word reads as a rendering bug, so small gaps are filled.
+T.equal(DocumentSearch.runs([0, 1, 2, 3, 4, 6]), [0..<7], "a one-letter hole is filled")
+T.equal(DocumentSearch.runs([0, 4], mergingGapsUpTo: 0), [0..<1, 4..<5], "…unless told not to")
+T.equal(DocumentSearch.runs([]), [], "nothing to fold")
+T.equal(DocumentSearch.runs([7]), [7..<8], "a single character is a run of one")
+
+// Offsets are absolute across the whole document, including past a blank line.
+do {
+    let text = "alpha\n\nbeta alpha"
+    T.equal(DocumentSearch.matchOffsets("alpha", in: text), [0, 1, 2, 3, 4, 12, 13, 14, 15, 16],
+            "every occurrence, counted from the start of the document")
+    T.equal(lit("alpha", text), ["alpha", "alpha"], "…and each lights up whole")
+}
+
+// CRLF is one Character in Swift, so line walking must not double-count it.
+T.equal(DocumentSearch.matchOffsets("beta", in: "alpha\r\nbeta"), [6, 7, 8, 9],
+        "offsets survive CRLF line endings")
+
+T.expect(DocumentSearch.matchOffsets("   ", in: briefText).isEmpty, "a blank query finds nothing")
+T.expect(DocumentSearch.matches("focused", in: briefText), "matches() is true when there is something to find")
+T.expect(!DocumentSearch.matches("zzzz", in: briefText), "and false when there is not")
+
+print("\nReleaseNotes")
+
+let changelogFixture = """
+# Changelog
+
+All notable changes to flow-bar, newest first. The top section is published as
+the GitHub release notes when a version is tagged.
+
+## v0.5.0 — 2026-09-20
+
+A second way in: ⌥Space opens a palette.
+
+### Added
+
+- A centered command palette.
+- A jump list.
+
+## v0.4.3 — 2026-09-17
+
+### Fixed
+
+- The session that lit the icon no longer vanishes.
+"""
+
+do {
+    let top = ReleaseNotes.top(of: changelogFixture)
+    T.equal(top?.version, "0.5.0", "the newest section, without its v")
+    T.equal(top?.heading, "v0.5.0 — 2026-09-20", "the heading as written")
+    T.expect(top?.body.hasPrefix("A second way in") == true, "body starts after the heading")
+    T.expect(top?.body.contains("A jump list.") == true, "…and runs to the end of the section")
+    T.expect(top?.body.contains("v0.4.3") == false, "…but not into the next one")
+    // `### Added` is a subsection of a release; treating it as a section would
+    // cut every entry into fragments.
+    T.expect(top?.body.contains("### Added") == true, "sub-headings stay inside their release")
+    T.equal(ReleaseNotes.sections(of: changelogFixture).count, 2, "one section per release")
+}
+
+T.equal(ReleaseNotes.section(version: "0.4.3", in: changelogFixture)?.heading,
+        "v0.4.3 — 2026-09-17", "an older version is still findable")
+T.equal(ReleaseNotes.section(version: "v0.4.3", in: changelogFixture)?.version, "0.4.3",
+        "a tag-style version resolves too")
+T.expect(ReleaseNotes.section(version: "9.9.9", in: changelogFixture) == nil,
+        "a version the changelog never carried")
+T.expect(ReleaseNotes.top(of: "# Changelog\n\nNothing yet.") == nil, "no releases, no section")
+T.expect(ReleaseNotes.top(of: "") == nil, "an empty changelog")
+
+// What gets rendered: the heading becomes the document's title.
+T.expect(ReleaseNotes.top(of: changelogFixture)?.markdown.hasPrefix("# v0.5.0 — 2026-09-20") == true,
+         "the section renders with its heading on top")
+
+print("\nReleaseLinks")
+
+// The tag format is shared by the cask's tarball URL, the git tag and this
+// link. All three must agree, and the only symptom of disagreement is a 404
+// nobody sees in a test run.
+T.equal(ReleaseLinks.url(forVersion: "0.5.0").absoluteString,
+        "https://github.com/pa/flow-bar/releases/tag/v0.5.0", "a version links to its tag")
+T.equal(ReleaseLinks.url(forVersion: "v0.5.0").absoluteString,
+        "https://github.com/pa/flow-bar/releases/tag/v0.5.0", "…and is not double-v'd")
+T.equal(ReleaseLinks.url(forVersion: " 0.5.0 ").absoluteString,
+        "https://github.com/pa/flow-bar/releases/tag/v0.5.0", "whitespace is trimmed")
+// A local build's tag has never existed, so it goes somewhere that does.
+T.equal(ReleaseLinks.url(forVersion: "0.0.0-dev").absoluteString,
+        "https://github.com/pa/flow-bar/releases", "a dev build goes to the index")
+T.equal(ReleaseLinks.url(forVersion: "").absoluteString,
+        "https://github.com/pa/flow-bar/releases", "and so does an unknown version")
+
+print("\nPaletteGeometry")
+
+// A 1440x900 screen with the menubar taken out.
+let screenA = CGRect(x: 0, y: 0, width: 1440, height: 875)
+// A second display to the LEFT and taller — the arrangement that catches
+// placement code which quietly assumes the origin is (0, 0).
+let screenB = CGRect(x: -2560, y: -200, width: 2560, height: 1415)
+
+do {
+    let f = PaletteGeometry.frame(in: screenA, width: 700, height: 320)
+    T.equal(f.midX, screenA.midX, "centred horizontally")
+    T.equal(f.maxY, PaletteGeometry.topEdge(in: screenA), "top edge is the anchor")
+    T.expect(f.maxY < screenA.maxY, "sits below the top of the screen")
+    T.expect(f.maxY > screenA.midY, "…and above the middle of it")
+
+    let g = PaletteGeometry.frame(in: screenB, width: 700, height: 320)
+    T.equal(g.midX, screenB.midX, "centred on a screen with a negative origin")
+    T.expect(g.minY > screenB.minY, "stays on that screen")
+}
+
+// Growing must not move the field out from under the cursor.
+do {
+    let top = PaletteGeometry.topEdge(in: screenA)
+    let small = PaletteGeometry.frame(in: screenA, width: 700, height: 200)
+    let grown = PaletteGeometry.resized(small, toHeight: 500, topEdge: top)
+    T.equal(grown.maxY, small.maxY, "the top edge does not move when the list grows")
+    T.equal(grown.height, 500, "…it grows downward")
+    T.equal(grown.origin.x, small.origin.x, "and never sideways")
+    let shrunk = PaletteGeometry.resized(grown, toHeight: 140, topEdge: top)
+    T.equal(shrunk.maxY, small.maxY, "nor when it shrinks")
+}
+
+// A panel narrower than the screen it is on, and never taller than one.
+T.equal(PaletteGeometry.frame(in: CGRect(x: 0, y: 0, width: 500, height: 400),
+                              width: 700, height: 200).width,
+        500, "a wide panel is capped by a narrow screen")
+T.equal(PaletteGeometry.clampHeight(40), 120, "a near-empty list still has a body")
+T.equal(PaletteGeometry.clampHeight(9000), 640, "and a long one stops short of the screen")
+T.equal(PaletteGeometry.clampHeight(312.4), 312, "heights land on whole pixels")
+
+print("\nPalette home list")
+
+// Home answers "what am I in the middle of" — in the order you need it.
+do {
+    let r = pIndex.search("")
+    T.equal(r.sections.map { $0.title }, ["Needs you", "Live sessions", "In progress", "Commands"],
+            "blocked first, then live, then the rest, then commands")
+    T.equal(r.sections[0].items.map { $0.title }, ["meymai-push-backlog"], "what needs you")
+    T.equal(r.sections[1].items.map { $0.title }, ["flow-bar-notch", "tessera-app"], "live sessions")
+    T.equal(r.sections[2].items.map { $0.title }, ["side-quest-docs"],
+            "in-progress work with no live session still shows, below the live ones")
+    // A blocked task is also live and also in-progress; it appears once.
+    T.equal(r.flat.filter { $0.id == "task:meymai-push-backlog" }.count, 1,
+            "a task appears once, in the most urgent group that claims it")
+    let homeSlugs = Set(r.flat.map { $0.title })
+    T.expect(!homeSlugs.contains("pa-homepage-copy"), "backlog is not on home")
+    T.expect(!homeSlugs.contains("frammer-eol"), "done is not on home")
+    T.equal(r.highlights.count, 0, "nothing is highlighted before you type")
+}
+
+T.equal(pIndex.search("   ").sections.map { $0.title }, pIndex.search("").sections.map { $0.title },
+        "a whitespace-only query is still home")
+
+// With nothing running, home is just the commands — never an empty panel.
+do {
+    let quiet = PaletteIndex.build(tasks: [task("x", status: "backlog")]).search("")
+    T.equal(quiet.sections.map { $0.title }, ["Commands"], "an idle home still offers the commands")
+}
 
 T.summarize()

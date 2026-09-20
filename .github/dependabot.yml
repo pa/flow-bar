@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Actions are the only dependency this repo has — there are no third-party
+  # Swift packages. Keeping them current is the cheapest supply-chain hygiene
+  # available, and the diff is always one line.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"

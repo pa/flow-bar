@@ -1,0 +1,18 @@
+name: Feature request
+description: Suggest something flow-bar should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: |
+        The situation, not the solution. What were you doing when the app got in
+        your way?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: Optional — a shape for it, if you have one in mind.

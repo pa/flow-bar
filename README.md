@@ -49,7 +49,7 @@ see what's in flight and switch between tasks without leaving the menubar.
 - **Flow roots & terminal** — switch between multiple `FLOW_ROOT`s (personal,
   work, a demo) and choose the terminal backend (zellij / iTerm2 / Terminal.app
   / Warp / Ghostty) from the footer.
-- **Global hotkey** — toggle flow-bar from anywhere (default ⌥⌘F, configurable
+- **Global hotkey** — toggle flow-bar from anywhere (default ⌥Space, configurable
   in Settings).
 - **Settings & self-update** — a Settings window for the hotkey, launch-at-login,
   and icon style; flow-bar updates itself from GitHub Releases (no re-download).
@@ -127,7 +127,7 @@ swift run flowbar-tests     # run the unit tests
 
 ## Usage
 
-Click the menubar **w** (or press your global hotkey — default **⌥⌘F**):
+Click the menubar **w** (or press your global hotkey — default **⌥Space**):
 
 - **In progress** is the home tab — search and press Enter to switch.
 - The left rail switches sections: Overview, Needs you, Playbooks, Projects,

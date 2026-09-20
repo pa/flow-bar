@@ -30,7 +30,8 @@ on that basis; it exists for the source-install path.) The harness lives in
 owners/tags text parsers, `DashboardMetrics`, the markdown block parser,
 the drill-in list flags/split, the session watcher's transcript parsers
 (Claude + Codex), locator and session-id parser, the `--kind`/`--auto` coverage
-rules, and the slug-first row label. Run `swift run flowbar-tests`.
+rules, the slug-first row label, and the palette's match ladder, field weights
+and home-list order. Run `swift run flowbar-tests`.
 
 `build-app.sh` produces `flow-bar.app` (gitignored). To relaunch after a
 rebuild, kill the old instance first:
@@ -65,6 +66,25 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
     under the slug on a session row.
   - `SessionAttention.swift` — `isBlocked`: the single predicate behind the
     icon and the Needs-you session list.
+  - `DocumentSearch.swift` — find-in-brief. Runs `PaletteMatcher` per line with
+    a **span limit** so a scattered match stays compact, and returns character
+    *offsets* — not results — because the find highlights in place.
+  - `JumpList.swift` — `⌘1…⌘9` pins. Ordered, capped at 9, never self-sorting.
+  - `ReleaseNotes.swift` — slices `CHANGELOG.md` into per-version sections.
+    `build-app.sh` copies the whole file into the bundle, so "what's new" needs
+    no network and the find bar can search every past release. The banner is
+    gated on the newest section's version matching `CFBundleShortVersionString`:
+    the version is stamped by the build script and the entry is written by a
+    human, so they can disagree, and the failure is silent — the banner would
+    name this build and the document would describe another.
+  - `ReleaseLinks.swift` — the `v<version>` tag URL. The same format is used by
+    the cask's tarball URL and the git tag; three places that must agree, whose
+    only symptom of disagreement is a 404 nobody sees in a test run. The footer
+    version links through it (a dev build goes to the releases index instead).
+  - `Palette.swift` — the search-first root's ranking: `PaletteItem` /
+    `PaletteIndex` / `PaletteMatcher` / `PaletteCommands`. One query scored
+    across every entity plus the app's own commands. Pure, so the ordering is
+    a test contract rather than something you squint at in a running app.
 - **`flow-bar`** (executable): the SwiftUI app.
   - `FlowBarApp.swift` — an AppKit `NSStatusItem` + `NSPopover` driven from an
     `AppDelegate` (NOT `MenuBarExtra`, which can't re-render the icon while the
@@ -82,9 +102,14 @@ pkill -f 'flow-bar.app/Contents/MacOS/flow-bar'; ./build-app.sh --run
     the popover immediately and runs `flow do` fire-and-forget.
   - `BrandIcon.swift` — flow's "w" wave (from the public repo's
     `assets/flow-logo.svg`) embedded as base64, sized ~11pt for the menubar.
+  - `PaletteWindow.swift` — `PalettePanel` (borderless, key-capable) and the
+    controller that places, sizes and dismisses the ⌥Space palette.
+  - `Views/PaletteView.swift` / `PaletteField.swift` / `PaletteRow.swift` — the
+    panel's content, its one always-focused `NSTextField`, and the row shared
+    with `SearchView`.
   - `Views/` — `MenuContentView` is the root: left **icon rail** + content
-    pane (per-section global search, header, footer). Sections: `TasksView`
-    (home), `InboxView` ("Needs you": owner questions + overdue + waiting),
+    pane (per-section search, header, footer). Sections: `SearchView` (the
+    palette, on the rail), `TasksView` (landing), `InboxView` ("Needs you": owner questions + overdue + waiting),
     `DashboardView` (metric tiles), `ProjectsView` (drill into a project's
     tasks), `PlaybooksView` (brief + notes + runs + Run), `OwnersView`
     (questions/tasks + pause/resume). Plus `TaskRow`. (A Team view existed
@@ -388,10 +413,211 @@ Building locally is the entire point.
   prefers what the linked binary actually records in `LC_BUILD_VERSION`.
 - The prebuilt `.dmg`/`.zip` on releases exist only for people who won't install
   a toolchain, and for the in-app updater that serves them.
+- **CI checks the two things local builds can't.** `ci.yml` has a
+  `command-line-tools` job that switches off Xcode and builds with CLT only —
+  the premise behind the plain test harness and the macOS 15 floor, which every
+  other job hides by selecting `latest-stable` Xcode. It also pipes
+  `flowbar-smoke --upgrade-script` through `sh -n`: that script is built by
+  string interpolation and only runs while the app is quitting, so a syntax
+  error there has nothing left alive to report it.
+- **`release.yml` fails a tag whose versions disagree.** The git tag, the cask's
+  `version` and the newest `## ` heading in CHANGELOG.md are edited by hand in
+  three places and nothing makes them agree; when they don't, the release ships
+  notes describing a different version and every part of it still "works".
 - `.github/workflows/verify-install.yml` asserts the acceptance test: the
   installed binary's `LC_BUILD_VERSION` sdk major must equal the runner's OS
   major. If that regresses, the app still works — it just silently stops being
   native, which is exactly the failure nobody notices.
+
+## The palette (⌥Space) and the popover (click)
+
+**Two shells, one split: the hotkey is for acting, the icon is for browsing.**
+
+- **⌥Space summons a centered panel** (`PaletteWindow.swift`, `PaletteView.swift`)
+  — Spotlight-shaped: one big field, a ranked list, a hint bar, no rail and no
+  chrome. Type, ↑↓, ↵ and you are in the task's terminal tab without a window
+  ever having been browsed.
+- **The panel navigates inside itself.** It is a mode, not a shortcut into the
+  popover. Entering a project, a tag, an owner, a playbook or a section
+  **pushes a `PaletteRoute`**: a chip appears in the field, the field starts
+  filtering what you entered, and ← or Esc pops. **→ expands** the selected row
+  into its detail — on a task that is its brief and its notes, rendered in the
+  panel with the same `MarkdownText` the popover uses. ↵ stays "open the tab",
+  because that is what the app is for, which is exactly why reading a brief has
+  to be the second thing a row can do.
+- **←/→ navigate only when the caret can't move.** They are the obvious keys for
+  in and out, and also how you move through what you typed — so the caret wins
+  while it still can: → expands from the end of the text, ← pops from the start.
+  While the field is empty, which is the whole time you are browsing, both are
+  free. ⇥ is bound to expand too, since focus has nowhere to escape to.
+- **What still hands off** is what genuinely needs a window the panel doesn't
+  have: task intake, the reminder form, Settings, and the Overview grid (tiles,
+  not a list — `PaletteListKind(sectionRawValue:)` returns nil for it). Those
+  set `Store.pendingPaletteAction`, open the popover and let `MenuContentView`
+  run it, so there is one implementation of "what a result does".
+- **`PaletteBadge` is the popover's badge vocabulary** — due / waiting / stale
+  / done / archived, same glyphs and colours as `TaskRow`, because a task that
+  is stale in one window is stale in the other and nobody should learn two sets
+  of marks. A due badge needs flow's own `due_label`; given a date and no label
+  it shows nothing rather than a guess.
+- **A palette row carries no task name.** It was the subtitle (via
+  `SessionRowLabel`), and on a real list it crowded the project and tags off the
+  end of the line — `#aws #fram…` reads as a tag that does not exist. The slug
+  is what you act on, the project and tags are what you scan by, and the name is
+  what you read once you have decided: it lives in the brief, one `→` away. It
+  stays **searchable as a keyword**, which also puts it on the right side of the
+  matcher's own rule — a slug is a token you abbreviate and matches fuzzily, a
+  name is prose and matches by substring.
+- **A row shows what it can be found by**: the project (folder glyph, so it
+  doesn't read as a hash-less tag) and the `#tags`. They **wrap** rather than
+  truncate, via `WrapLayout` — SwiftUI has no flow container, and an `HStack`
+  that truncates loses information silently. A row is allowed to get taller; it
+  is not allowed to lie.
+- **Multi-open is shared with the popover**, not reimplemented: `⌘↵` toggles a
+  row into `Store.selectedTaskSlugs`, a selection bar appears, and `↵` with a
+  non-empty batch opens it — the popover's own rule that "a selection wins".
+  Same five-task confirm threshold and same wording, because it is the same
+  action. Esc unwinds it in order: confirm → query → selection → route → close.
+- **The jump list is Harpoon, not recents** (`JumpList`, `⌘1…⌘9`, `⌘J` to
+  pin/unpin). A recents list reorders itself every time you use it, so a thing's
+  position is never the same twice and you must read before you can act. A jump
+  list is placed by you and stays put, which is what makes `⌘2` a reflex —
+  nothing here ever reorders it. Pins lead the home list in pin order, and the
+  numbers fire from anywhere: three routes deep, mid-query. Capped at nine
+  because the keys run out. Persisted **per flow root** (two roots are two
+  bodies of work). A pinned task that vanishes is pruned, because a number that
+  opens nothing is worse than one fewer number.
+- **⌘-chords go through `performKeyEquivalent`, not `doCommandBy`.** A field
+  editor turns keystrokes into *text commands* (`moveUp:`, `insertNewline:`) and
+  ⌘1 is not one, so it never reaches the delegate. `PaletteTextField` overrides
+  the key-equivalent hook the window offers the view tree first.
+- **The changelog is a document like any other**: `@whats new` pushes a
+  `.releaseNotes` route through the same reader a brief uses — scrolling, find
+  bar, highlighting. It surfaces itself once, above everything, on the first
+  open of a version whose notes have not been read (never on a first install:
+  telling someone what changed about software they have never used is noise),
+  and opening it retires the banner. The v0.5.0 entry doubles as the palette's
+  key and command reference, which is why the whole file ships rather than one
+  section.
+- **A leading sigil scopes the query**: `@` narrows the same list to commands
+  (`PaletteQuery`). It scopes rather than navigating, so backspacing it puts you
+  back exactly where you were — the point of reaching for a character instead of
+  a key. A sigil the index can't honour (no commands inside a route) is dropped
+  and its text searched, never matched literally. Only `@` exists on purpose:
+  every sigil is a character you can no longer start a search with.
+- **Inside a brief the field is a find that highlights in place**, with an
+  editor's find bar: `n of m`, ∧∨ buttons, ↑↓ to step, wrapping. The brief is
+  rendered as **one scrolling `MarkdownDocument`**, not a stack of
+  `MarkdownText` blocks, because `scrollRangeToVisible` needs a text view that
+  owns its scrolling and a `ScrollViewReader` can only reach a view, never a
+  line inside one. Cost: the per-note tinted cards became a rule and a heading. Highlighting is measured against the **rendered**
+  text, never the markdown source — `## ` is gone and `**bold**` has lost its
+  asterisks, so source offsets would drift further out of place with every
+  marker above them. The attributed string is rebuilt per query rather than
+  having the last highlight stripped, because `removeAttribute(.backgroundColor)`
+  would take the renderer's own code-block and table backgrounds with it.
+  Runs merge across gaps of ≤2 characters: a fuzzy match has holes by
+  definition, and one dark letter mid-word reads as a rendering bug. Two
+  colours — every match, and the one you are on — because a count is only
+  useful if you can tell which one you are looking at. "no matches" is spelled
+  out, since nothing-found and not-looking render identically.
+- **Skip-prompts is only offered where it can do anything.** On a task whose
+  session is live — including a *blocked* one, which is live and stopped to ask
+  you something — `flow do` focuses the running tab and returns before it builds
+  a command line, so the flag never reaches the harness and the permission mode
+  is whatever that process was started with. The hint and the button are hidden
+  there (`PaletteItem.hasLiveSession`), and the row's tooltip says why, so the
+  absence is explained rather than discovered. It applies to the two paths that
+  actually spawn: a first bootstrap, and a resume of a task whose tab was closed.
+- **`openTaskSkippingPrompts` is a separate action** from `openTask`, and the
+  brief view offers it as a **clicked control** beside ↵ Open. A control cannot
+  read a modifier: by the time a button's action runs, whatever was held is long
+  gone. ⌥↵ and ⌥-click still go through `openTask`, where the Store reads the
+  live keyboard. Still per-open, still not a setting.
+- **Clicking the menubar icon opens the popover**, which is the *mouse* mode and
+  carries **no search section at all** — the rail has no magnifying glass. A
+  second search surface inside the browsing window is a second front door to
+  the same room.
+
+Empty query shows what you're in the middle of — blocked sessions, then live
+ones, then in-progress, then commands — never the backlog or done lists, which
+are findable only by typing.
+
+- **The panel is a borderless `NSPanel` that overrides `canBecomeKey`.**
+  Borderless windows refuse key status, and without it the field cannot take a
+  keystroke — it would be a picture of a palette. `.canJoinAllSpaces` +
+  `.fullScreenAuxiliary`, because a launcher you must leave full-screen to
+  reach is not a launcher.
+- **The keyboard works here because there is nowhere for it to be.** Arrow keys
+  arrive as `doCommandBy` selectors on the one `NSTextField` that is always
+  first responder (`PaletteField`), and the cursor is an index into one flat
+  array. The version deleted in `1e5cb4e` was a cursor over rail zones, a
+  router and a tree, with SwiftUI focus moving between them. Tab is *bound*
+  rather than swallowed: focus has nowhere to escape to, so the key is free.
+- **A stack, not a router.** `PaletteRoute` is one array: push by entering,
+  pop with Esc, and the field never moves. The navigation deleted in `1e5cb4e`
+  was a *router* — a graph of panes with focus zones, where "where am I" and
+  "where is the keyboard" were separate questions with separate answers. A
+  pushed route carries **no commands** (inside a project, "Settings…" is not an
+  answer) and an empty query means "all of it", where at the root it means
+  "what am I in the middle of" (`PaletteIndex.listing` vs `home`).
+- **Route content reuses the popover's loaders.** `loadProjectTasks`,
+  `loadTagTasks`, `loadOwnerTasks`, `refreshPlaybooks`, `refreshMetrics` — the
+  palette is a second caller, not a second implementation. The one exception is
+  `Store.paletteDetail`, which is deliberately *not* the popover's
+  `peekBrief`/`taskDetail` pair: two shells sharing one slot means whichever
+  loads second wins.
+- **The panel grows downward from a fixed top edge** (`PaletteGeometry`, in the
+  core so the harness can prove it). A centred window would slide the field out
+  from under the cursor you are typing into on every keystroke that changed the
+  result count. It is placed on the screen the *pointer* is on, at 18% down —
+  where the eye lands.
+
+- **Ranking is `FlowBarCore/Palette.swift`, and it is the feature.** The old
+  per-section `filtered(by:)` was a substring test whose scoping did real
+  disambiguation work; a global list only beats it if the ordering is good, so
+  the ordering is a pure function with a test contract (`swift run
+  flowbar-tests`) rather than something you squint at in a running app.
+- **The ladder:** exact > prefix > later-word prefix > substring > scattered
+  subsequence, with field weights on top (title > subtitle > keyword) — so a
+  *fuzzy* title hit beats an *exact* keyword hit. What you can see outranks what
+  you can't. A space is AND across fields, which is what makes "flow notch"
+  find `flow-bar-notch` when neither substring nor subsequence survives the gap.
+- **One matcher, two surfaces.** `PaletteMatcher.score` is public so
+  `DocumentSearch` runs the same ladder over a document's lines — there is one
+  fuzzy-find implementation in the app, not two that drift.
+- **Fuzzy in prose needs a span limit** (`DocumentSearch.spanLimit` = n + 4).
+  A scattered subsequence is right for a slug and wrong for a paragraph,
+  because the letters of any short word occur somewhere in any long sentence.
+  Measured on a real brief: at 3n, `rail` matched "**Ra**nk**i**ng is a
+  **l**adder" across fourteen characters. The accepted cost is that an acronym
+  of a *phrase* doesn't match in prose — `sfp` will not find "Search-first
+  popover" the way `fbn` finds `flow-bar-notch`.
+- **Only titles match fuzzily.** A title is a short dense slug where a scattered
+  match is usually what you meant; a subtitle is a sentence where it is usually
+  an accident — measured: "palette" was pulling in a task named "…playbook
+  parity, done lists, honest badges". Keywords (project, tags, status words,
+  command aliases) are invisible, so a fuzzy hit on one is an unexplainable row;
+  they match substrings only.
+- **`PaletteKind.bias` is a thumb, not a fist** (task +30, command −10, against
+  ladder rungs of 100+). It only reorders equally-good matches, where the row
+  whose Enter runs `flow do` should win over one that merely navigates. Also
+  found by running the index on real data: "flow" put the *project* `flow-bar`
+  above the task `flow-bar-notch` purely because the title is six characters
+  shorter.
+- **`PaletteResults.flat` is exactly `sections` concatenated.** That invariant
+  is what a keyboard cursor will index into. Results are sorted globally and
+  only *then* grouped, so the first row is the best match in the app, not the
+  best match in whichever group sorts first.
+- **The blocked set is sampled at open, not observed.** `SessionMonitor` fires
+  on every transcript delta; binding the home list to it would reorder rows
+  under the eye already reading them.
+- **`flowbar-smoke --palette [queries…]`** prints the index and its ranking
+  against real flow data. Both ranking faults above were found that way, not by
+  reasoning — run it after touching the matcher.
+- Two extra subprocesses per open (`list tasks --include-done
+  --include-archived`, `list playbooks`), concurrent with the nine
+  `refreshMetrics` already fires, and still nothing while the popover is closed.
 
 ## Panes and overlays
 

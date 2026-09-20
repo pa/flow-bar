@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: flow CLI issues
+    url: https://github.com/Facets-cloud/flow/issues
+    about: flow-bar is a front end for flow. Anything about tasks, sessions or the database itself belongs there.
+  - name: Security report
+    url: https://github.com/pa/flow-bar/security/advisories/new
+    about: Report a vulnerability privately instead of opening an issue.

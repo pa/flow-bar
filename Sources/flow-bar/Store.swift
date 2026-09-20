@@ -276,6 +276,7 @@ final class Store: ObservableObject {
     func beginActiveRefresh(interval: TimeInterval = 60) {
         refresh()
         refreshMetrics()
+        refreshPalette()
         checkForUpdate()
         activeRefreshTask?.cancel()
         activeRefreshTask = Task { [weak self] in
@@ -307,6 +308,10 @@ final class Store: ObservableObject {
         runs = []
         clearPlaybookDetail()
         reminderLinkTasks = []
+        // The palette's index is the largest thing we hold — every task in
+        // flow, not just the live ones. It goes with the rest.
+        allTasks = []
+        palette = PaletteIndex()
     }
 
     /// Check GitHub for a newer release (throttled to once/hour unless forced).
@@ -491,10 +496,207 @@ final class Store: ObservableObject {
                 self.tasks = result
                 self.errorText = nil
                 self.lastUpdated = Date()
+                self.rebuildPalette()
             } catch {
                 self.errorText = String(describing: error)
             }
             self.isLoading = false
+        }
+    }
+
+    // MARK: - Palette (the search-first root)
+
+    /// Every task, whatever its status — the palette searches what the section
+    /// views browse. The polled `tasks` list is in-progress only, which is the
+    /// right set for the home list and the wrong one for search: a task you
+    /// half-remember is most often one you are *not* in the middle of.
+    @Published var allTasks: [FlowTask] = []
+
+    /// The ranked index behind the search root. Rebuilt from whatever has
+    /// loaded, never awaited — see `rebuildPalette`.
+    @Published private(set) var palette = PaletteIndex()
+    @Published var paletteLoading = false
+
+    /// The jump list — tasks you pinned to ⌘1…⌘9.
+    ///
+    /// Persisted, because a number that changes between launches is not a
+    /// reflex. Kept per flow root: two roots are two bodies of work, and ⌘2
+    /// meaning different things in each is correct.
+    @Published var jumpList: JumpList = Store.loadJumpList(UserDefaults.standard.string(forKey: "activeProfile") ?? Profile.defaultID) {
+        didSet { saveJumpList() }
+    }
+
+    private var jumpListKey: String { "jumpList.\(activeProfileID.isEmpty ? Profile.defaultID : activeProfileID)" }
+
+    private static func loadJumpList(_ profileID: String) -> JumpList {
+        let key = "jumpList.\(profileID.isEmpty ? Profile.defaultID : profileID)"
+        return JumpList(UserDefaults.standard.stringArray(forKey: key) ?? [])
+    }
+
+    private func saveJumpList() {
+        UserDefaults.standard.set(jumpList.slugs, forKey: jumpListKey)
+    }
+
+    /// Pin or unpin a task, and say what happened.
+    @discardableResult
+    func toggleJump(_ slug: String) -> JumpList.Change {
+        var list = jumpList
+        let change = list.toggle(slug)
+        if change != .full { jumpList = list }
+        rebuildPalette()
+        return change
+    }
+
+    // MARK: Release notes
+
+    /// The version whose notes the user has already seen.
+    private static let seenReleaseKey = "seenReleaseVersion"
+
+    /// A version worth announcing, or nil.
+    ///
+    /// **Only on an upgrade, never on a first run.** With nothing recorded we
+    /// record silently: a fresh install has nothing to announce, and opening
+    /// with "what's new" would be telling someone what changed about software
+    /// they have never used.
+    @Published private(set) var unreadRelease: String?
+
+    func refreshUnreadRelease() {
+        let current = currentVersion
+        // Notes that describe a different version are worse than none: the
+        // banner would name this build and the document would describe another.
+        guard AppInfo.releaseNotesMatchBuild, !AppInfo.isDevBuild else {
+            unreadRelease = nil
+            return
+        }
+        let seen = UserDefaults.standard.string(forKey: Self.seenReleaseKey)
+        guard let seen else {
+            UserDefaults.standard.set(current, forKey: Self.seenReleaseKey)
+            unreadRelease = nil
+            return
+        }
+        unreadRelease = (seen == current) ? nil : current
+    }
+
+    /// Opening the notes is what retires the banner.
+    func markReleaseNotesSeen() {
+        UserDefaults.standard.set(currentVersion, forKey: Self.seenReleaseKey)
+        unreadRelease = nil
+        rebuildPalette()
+    }
+
+    /// Whether a task's harness session is running right now.
+    ///
+    /// Decides whether to offer "skip permission prompts": on a live task the
+    /// flag is inert, because `flow do` focuses the existing tab and returns
+    /// before it ever builds a command line.
+    func hasLiveSession(_ slug: String) -> Bool {
+        if let t = allTasks.first(where: { $0.slug == slug }) { return t.isLive }
+        if let t = tasks.first(where: { $0.slug == slug }) { return t.isLive }
+        return false
+    }
+
+    /// The task at a 1-based jump position, if it still exists.
+    func jumpTarget(_ number: Int) -> String? { jumpList.slug(at: number) }
+
+    /// Bumped every time the centered palette is summoned. The view watches it
+    /// to clear the query and retake focus — a fresh summon is a fresh search.
+    @Published var paletteNonce = 0
+
+    /// A palette result that needs the popover's UI to carry out (anything but
+    /// opening a task, which needs no window at all). Set as the panel closes;
+    /// consumed by `MenuContentView` as the popover opens.
+    @Published var pendingPaletteAction: PaletteAction?
+
+    /// The palette panel's own detail state.
+    ///
+    /// Deliberately **not** `peekBrief`/`taskDetail`: that pair is the
+    /// popover's overlay, keyed to `peekedSlug`, and two shells sharing one
+    /// slot means whichever loads second wins. They are separate windows; they
+    /// get separate state.
+    @Published var paletteDetail: TaskDetail?
+    @Published var paletteDetailLoading = false
+    private var paletteDetailSlug: String?
+
+    /// Load a task's (or playbook's) brief + notes for a pushed palette route.
+    func loadPaletteDetail(_ slug: String, kind: PeekKind = .task) {
+        guard paletteDetailSlug != slug || paletteDetail == nil else { return }
+        paletteDetailSlug = slug
+        paletteDetail = nil
+        paletteDetailLoading = true
+        Task {
+            let d = try? await Task.detached(priority: .userInitiated) {
+                let client = FlowClient()
+                return kind == .playbook ? try client.playbookDetail(slug)
+                                         : try client.taskDetail(slug)
+            }.value
+            // Ignore a response for a route the user has already left.
+            guard self.paletteDetailSlug == slug else { return }
+            self.paletteDetail = d
+            self.paletteDetailLoading = false
+        }
+    }
+
+    /// Pre-drill requests: set before switching sections so the destination
+    /// opens on one row instead of its list. Mirrors `pendingTagDrill`, which
+    /// the dashboard's top-tag tiles already use.
+    @Published var pendingProjectDrill: String?
+    @Published var pendingPlaybookDrill: String?
+    @Published var pendingOwnerDrill: String?
+
+    /// Rebuild the index from whatever is currently loaded.
+    ///
+    /// Cheap (a few hundred value types) and idempotent, so every loader calls
+    /// it as it lands and the list fills in progressively rather than waiting
+    /// for the slowest read. A half-filled index is a legal one: searching
+    /// before playbooks arrive finds tasks, not nothing.
+    ///
+    /// **The blocked set is sampled here, not observed.** `SessionMonitor` is
+    /// its own ObservableObject and fires on every transcript delta; binding
+    /// the home list to it would reorder the rows under a cursor that is
+    /// already reading them. Sampling at open (and at each load) means a
+    /// session that blocks while you are looking lands on the next open, which
+    /// is the behaviour you want anyway.
+    func rebuildPalette() {
+        palette = PaletteIndex.build(
+            tasks: allTasks.isEmpty ? tasks : allTasks,
+            projects: metrics?.projects ?? [],
+            playbooks: playbooks,
+            owners: metrics?.owners ?? [],
+            tags: metrics?.tags ?? [],
+            reminders: reminders,
+            blocked: sessionAlertsEnabled
+                ? Set(sessionMonitor.blockedRows.map(\.slug)) : [],
+            jumpList: jumpList,
+            unreadRelease: unreadRelease)
+    }
+
+    /// Load the two lists only the palette needs — every task (including done
+    /// and archived) and the playbook definitions. Everything else it indexes
+    /// is already fetched by `refresh`/`refreshMetrics` on open.
+    ///
+    /// Two extra subprocesses per open, concurrent with the nine already in
+    /// flight, and still nothing while the popover is closed.
+    func refreshPalette() {
+        paletteLoading = true
+        Task {
+            let c = FlowClient()
+            async let all = Task.detached(priority: .userInitiated) {
+                (try? c.listTasks(includeDone: true, includeArchived: true)) ?? []
+            }.value
+            async let pbs = Task.detached(priority: .userInitiated) {
+                (try? c.listPlaybooks()) ?? []
+            }.value
+            let (loadedTasks, loadedPlaybooks) = await (all, pbs)
+            self.allTasks = loadedTasks
+            if !loadedTasks.isEmpty {
+                let pruned = self.jumpList.pruned(to: Set(loadedTasks.map(\.slug)))
+                if pruned != self.jumpList { self.jumpList = pruned }
+            }
+            // Same list the Playbooks section uses — filling it here is a head
+            // start for that view, not a second copy.
+            if !loadedPlaybooks.isEmpty { self.playbooks = loadedPlaybooks }
+            self.rebuildPalette()
+            self.paletteLoading = false
         }
     }
 
@@ -585,6 +787,7 @@ final class Store: ObservableObject {
             self.playbooks = pbs
             self.runs = rns
             self.playbooksLoading = false
+            self.rebuildPalette()
         }
     }
 
@@ -707,6 +910,7 @@ final class Store: ObservableObject {
             self.tasks = m.inProgress
             self.lastUpdated = Date()
             self.metricsLoading = false
+            self.rebuildPalette()
         }
     }
 
