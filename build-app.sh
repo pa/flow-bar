@@ -111,6 +111,25 @@ SDK_VERSION="$(detect_sdk_version)"
 echo "==> toolchain: $(swift --version 2>/dev/null | head -1)"
 echo "==> macOS SDK: ${SDK_VERSION}"
 
+# --- Liquid Glass, if the SDK has it -----------------------------------------
+#
+# `.glassEffect` exists only in the macOS 26 SDK. `#available(macOS 26.0, *)`
+# guards whether it is *called* on the machine running the app; it says nothing
+# about whether the symbol exists in the SDK being compiled against, and a call
+# to a symbol your SDK has never heard of does not compile.
+#
+# That matters here more than in most apps: the cask compiles on the USER's
+# machine, so a macOS 15 user with Command Line Tools was getting a wall of
+# compiler errors from `brew install`. Passing -DGLASS only when the SDK can
+# actually provide it lets those machines build the fallback styling instead.
+SDK_MAJOR="${SDK_VERSION%%.*}"
+if [ -n "${SDK_MAJOR}" ] && [ "${SDK_MAJOR}" -ge 26 ] 2>/dev/null; then
+    SWIFT_FLAGS="${SWIFT_FLAGS} -Xswiftc -DGLASS"
+    echo "==> Liquid Glass enabled (SDK ${SDK_VERSION})"
+else
+    echo "==> Liquid Glass off — SDK ${SDK_VERSION} predates it; using the fallback styling"
+fi
+
 # --- Build -------------------------------------------------------------------
 echo "==> swift build -c ${CONFIG} ${SWIFT_FLAGS}"
 # shellcheck disable=SC2086

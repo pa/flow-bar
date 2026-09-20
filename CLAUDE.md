@@ -314,6 +314,20 @@ row reads "flow-bar-notch - waiting on you".
   `Store` on `ObservableObject` (not `@Observable`) anyway: it's one
   `@MainActor` object shared everywhere and converting it is a large, risky
   refactor with no user-visible benefit.
+- **`#available` is not enough for an API your SDK doesn't have.** `.glassEffect`
+  exists only in the macOS 26 SDK. `#available(macOS 26.0, *)` decides whether to
+  *call* it on the machine running the app and says nothing about whether the
+  symbol exists in the SDK being compiled against — and a call to a symbol your
+  SDK has never heard of does not compile. Because the cask compiles on the
+  *user's* machine, that made `brew install` fail outright for a macOS 15 user
+  with Command Line Tools, for two weeks, with nothing to show it: every CI job
+  selected `latest-stable` Xcode, which carries the newer SDK. `build-app.sh`
+  now passes `-DGLASS` only when `detect_sdk_version` reports 26+, and
+  `GlassSurface`/`Theme.isGlass` carry both guards — the `#if` decides whether
+  the code can be *built*, the `#available` whether it may *run*. Plain
+  `swift build` does not set the flag, so it always compiles the fallback path;
+  the glass path is covered by CI's "Assemble the app bundle" step. The
+  `command-line-tools` job is what catches this class of thing.
 - **Signing is load-bearing, not a later concern.** `FlowClient.spawnDisclaimed`
   deliberately does *not* disclaim responsibility for the AppleScript terminal
   backends, so flow-bar itself owns the TCC Automation grant — and TCC keys that
