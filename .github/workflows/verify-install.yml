@@ -21,7 +21,7 @@ jobs:
         os: [macos-15, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Select latest Xcode (Swift 6)
         uses: maxim-lobanov/setup-xcode@v1
