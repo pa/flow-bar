@@ -109,15 +109,26 @@ struct PaletteField: NSViewRepresentable {
         }
 
         /// The caret sits after the last character, with nothing selected.
+        ///
+        /// **`assumeIsolated`, not a bare call.** `selectedRange()` and `string`
+        /// are main-actor isolated, and whether the delegate method calling them
+        /// is *inferred* to be isolated too depends on the SDK: Xcode's says yes
+        /// and the Command Line Tools' Swift 6.1 says no, which is how CI caught
+        /// this and a local build never would. These callbacks do arrive on the
+        /// main thread, so stating that outright is both true and portable.
         private func atEnd(_ tv: NSTextView) -> Bool {
-            let r = tv.selectedRange()
-            return r.length == 0 && r.location >= (tv.string as NSString).length
+            MainActor.assumeIsolated {
+                let r = tv.selectedRange()
+                return r.length == 0 && r.location >= (tv.string as NSString).length
+            }
         }
 
         /// The caret sits before the first character, with nothing selected.
         private func atStart(_ tv: NSTextView) -> Bool {
-            let r = tv.selectedRange()
-            return r.length == 0 && r.location == 0
+            MainActor.assumeIsolated {
+                let r = tv.selectedRange()
+                return r.length == 0 && r.location == 0
+            }
         }
 
         func control(_ control: NSControl, textView: NSTextView,
