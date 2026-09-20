@@ -1,8 +1,8 @@
 cask "flow-bar" do
-  version "0.5.0"
+  version "0.5.1"
   # sha256 of the SOURCE TARBALL (not a release zip). release.yml computes it
   # with `curl -sL <url> | shasum -a 256` and rewrites this line on every tag.
-  sha256 "5a212ecda822c6016092bce57fbd80bfac59a06a08e180c85726de24d8ab57ab"
+  sha256 "a57939d6d0cfd2e41f34df694f47a10f5b9aadfe9a64354253ec1955597f1253"
 
   # No `verified:` — Homebrew deprecated it for the `url` stanza, and it warned
   # on every `brew upgrade`. It only ever existed to vouch for a download host
