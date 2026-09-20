@@ -76,9 +76,38 @@ enum AppInfo {
     }
 
     /// Set when the running OS is newer than the SDK we were built against —
-    /// i.e. the UI is rendering in compatibility mode and a rebuild would fix it.
+    /// i.e. the UI is rendering in compatibility mode.
+    ///
+    /// **Not on its own a reason to ask for a rebuild**: Apple ships a new macOS
+    /// months before the Xcode carrying its SDK, so this is true for everyone
+    /// who upgrades early and a rebuild would produce an identical binary. See
+    /// `SDKFreshness.shouldRebuild`, which also asks whether a newer SDK exists.
     static var sdkIsBehindOS: Bool {
         guard let built = buildSDKMajor else { return false }
         return ProcessInfo.processInfo.operatingSystemVersion.majorVersion > built
+    }
+
+    /// The newest macOS SDK this machine can build against, or nil when there is
+    /// no usable toolchain.
+    ///
+    /// Asked for the `macosx` SDK by name for the same reason `build-app.sh`
+    /// does: with Xcode selected, a bare `xcrun --show-sdk-version` can resolve
+    /// to the Command Line Tools SDK instead.
+    static func availableSDKVersion() -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        task.arguments = ["--sdk", "macosx", "--show-sdk-version"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do { try task.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0,
+              let text = String(data: data, encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return nil }
+        return text
     }
 }

@@ -230,10 +230,25 @@ final class Store: ObservableObject {
     /// The UI offers the `brew upgrade` command instead of an Install button.
     var isManagedInstall: Bool { Updater.isManagedInstall }
 
-    /// True when the running OS is newer than the SDK this binary was built
-    /// against — the UI is in compatibility mode and a rebuild would fix it.
-    /// Without this nudge a user who upgrades macOS keeps the stale build forever.
-    var needsSDKRebuild: Bool { AppInfo.isManagedInstall && AppInfo.sdkIsBehindOS }
+    /// The newest SDK this machine can build against. Probed once — it spawns
+    /// `xcrun`, and it cannot change while the app is running.
+    private lazy var availableSDK: String? = AppInfo.availableSDKVersion()
+
+    /// True when a rebuild would actually produce a newer-SDK binary.
+    ///
+    /// **Being behind the OS is not sufficient.** Apple ships a new macOS months
+    /// before the Xcode carrying its SDK, so anyone who upgrades early is behind
+    /// with nothing to do about it — and this prompt used to sit in their footer
+    /// permanently, asking for a rebuild that produces the same binary. Measured
+    /// on macOS 27.0 with the newest available SDK at 26.5. Advice that cannot
+    /// be taken teaches people to ignore the footer.
+    var needsSDKRebuild: Bool {
+        AppInfo.isManagedInstall
+            && SDKFreshness.shouldRebuild(
+                buildSDK: AppInfo.buildSDK,
+                availableSDK: availableSDK,
+                osMajor: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+    }
 
     /// Copy a shell command to the pasteboard (used by the update affordances).
     func copyToPasteboard(_ text: String) {

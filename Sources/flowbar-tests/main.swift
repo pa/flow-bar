@@ -2064,6 +2064,37 @@ T.expect(DocumentSearch.matchOffsets("   ", in: briefText).isEmpty, "a blank que
 T.expect(DocumentSearch.matches("focused", in: briefText), "matches() is true when there is something to find")
 T.expect(!DocumentSearch.matches("zzzz", in: briefText), "and false when there is not")
 
+print("\nSDKFreshness")
+
+// The measured case that forced this: macOS 27 with no macOS 27 SDK anywhere on
+// the machine. The old check asked only "is the build behind the OS?" and
+// nagged forever, because the rebuild it asked for produces the same binary.
+T.expect(!SDKFreshness.shouldRebuild(buildSDK: "26.5", availableSDK: "26.5", osMajor: 27),
+         "no nudge when no newer SDK exists to rebuild against")
+T.expect(SDKFreshness.shouldRebuild(buildSDK: "26.5", availableSDK: "27.0", osMajor: 27),
+         "…and a nudge once the SDK lands, which is when it can be acted on")
+
+// Both halves must hold.
+T.expect(!SDKFreshness.shouldRebuild(buildSDK: "26.5", availableSDK: "26.5", osMajor: 26),
+         "a current build is not behind anything")
+T.expect(!SDKFreshness.shouldRebuild(buildSDK: "26.5", availableSDK: "27.0", osMajor: 26),
+         "a newer SDK than the OS is not a reason to rebuild — nothing renders wrongly")
+T.expect(!SDKFreshness.shouldRebuild(buildSDK: "27.0", availableSDK: "27.0", osMajor: 26),
+         "built ahead of the OS is fine")
+
+// Unknowns mean silence: someone with no toolchain cannot act on it.
+T.expect(!SDKFreshness.shouldRebuild(buildSDK: nil, availableSDK: "27.0", osMajor: 27),
+         "an unstamped build says nothing")
+T.expect(!SDKFreshness.shouldRebuild(buildSDK: "26.5", availableSDK: nil, osMajor: 27),
+         "no toolchain, no nudge")
+T.expect(!SDKFreshness.shouldRebuild(buildSDK: "unknown", availableSDK: "27.0", osMajor: 27),
+         "an unparseable stamp says nothing")
+
+T.equal(SDKFreshness.major("26.5"), 26, "major")
+T.equal(SDKFreshness.major("27"), 27, "major with no minor")
+T.expect(SDKFreshness.major(nil) == nil, "nil")
+T.expect(SDKFreshness.major("") == nil, "empty")
+
 print("\nReleaseNotes")
 
 let changelogFixture = """
