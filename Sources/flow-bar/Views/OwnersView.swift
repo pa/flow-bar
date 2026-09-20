@@ -9,11 +9,26 @@ struct OwnersView: View {
 
     @State private var selected: Owner?
 
+    /// Open pre-drilled into an owner the palette picked. Held until
+    /// `flow owner list` lands, since that is where the row comes from.
+    private func consumeDrill() {
+        guard let slug = store.pendingOwnerDrill,
+              let o = store.metrics?.owners.first(where: { $0.slug == slug })
+        else { return }
+        store.pendingOwnerDrill = nil
+        selected = o
+        store.loadOwnerTasks(slug)
+    }
+
     var body: some View {
         Group {
             if let o = selected { detail(o) } else { list }
         }
-        .onAppear { if store.metrics == nil { store.refreshMetrics() } }
+        .onAppear {
+            if store.metrics == nil { store.refreshMetrics() }
+            consumeDrill()
+        }
+        .onChange(of: store.metricsLoading) { consumeDrill() }
     }
 
     private var owners: [Owner] {

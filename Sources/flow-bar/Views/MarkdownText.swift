@@ -22,16 +22,22 @@ import SwiftUI
 /// everything here is presentation.
 struct MarkdownText: NSViewRepresentable {
     let source: String
-    init(_ source: String) { self.source = source }
+    /// A live find: every match is highlighted in place. Empty means no find.
+    var find: String = ""
+
+    init(_ source: String, find: String = "") {
+        self.source = source
+        self.find = find
+    }
 
     func makeNSView(context: Context) -> MarkdownNSTextView {
         let v = MarkdownNSTextView()
-        v.setMarkdown(source)
+        v.setMarkdown(source, find: find)
         return v
     }
 
     func updateNSView(_ nsView: MarkdownNSTextView, context: Context) {
-        nsView.setMarkdown(source)
+        nsView.setMarkdown(source, find: find)
     }
 
     /// SwiftUI asks for the height at a proposed width; the text view lays out
@@ -53,6 +59,7 @@ struct MarkdownText: NSViewRepresentable {
 /// `NSTextView` pick TextKit 2 loses `layoutManager` entirely.
 final class MarkdownNSTextView: NSTextView {
     private var rendered: String?
+    private var highlighted: String?
 
     init() {
         let storage = NSTextStorage()
@@ -86,10 +93,125 @@ final class MarkdownNSTextView: NSTextView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is unused") }
 
-    func setMarkdown(_ source: String) {
-        guard rendered != source else { return }
-        rendered = source
-        textStorage?.setAttributedString(MarkdownRenderer.attributed(source))
+    /// Every range the current find matched, in document order.
+    private(set) var matchRanges: [NSRange] = []
+    private var currentMatch = -1
+
+    /// The rendered document with no find applied.
+    ///
+    /// **Kept so a find doesn't re-parse the markdown on every keystroke.** The
+    /// highlight cannot simply be stripped off the live storage —
+    /// `removeAttribute(.backgroundColor)` would take the renderer's own code
+    /// block and table cell backgrounds with it — so each new query starts from
+    /// a clean copy. Copying an attributed string is cheap; parsing a 17 KB
+    /// changelog eight times while someone types "palette" is not.
+    private var base: NSAttributedString?
+
+    func setMarkdown(_ source: String, find: String = "", current: Int = 0) {
+        if rendered != source {
+            rendered = source
+            base = MarkdownRenderer.attributed(source)
+            highlighted = nil
+        }
+        if highlighted != find {
+            highlighted = find
+            guard let base else { return }
+            let text = NSMutableAttributedString(attributedString: base)
+            matchRanges = find.isEmpty ? [] : Self.highlight(find, in: text)
+            textStorage?.setAttributedString(text)
+            currentMatch = -1
+        }
+        focusMatch(current)
+    }
+
+    /// Mark one match as the current one and scroll it into view.
+    ///
+    /// This is the half of a find that a highlight alone cannot do: on a brief
+    /// longer than the panel, every match but the first is off-screen, and a
+    /// count with no way to reach what it counted is a tease.
+    private func focusMatch(_ index: Int) {
+        guard !matchRanges.isEmpty, let storage = textStorage else { return }
+        let i = min(max(index, 0), matchRanges.count - 1)
+        guard i != currentMatch else { return }
+        currentMatch = i
+        storage.beginEditing()
+        for (n, range) in matchRanges.enumerated() where range.upperBound <= storage.length {
+            storage.addAttribute(.backgroundColor,
+                                 value: n == i ? Self.currentColour : Self.matchColour,
+                                 range: range)
+        }
+        storage.endEditing()
+        scrollToMatch(matchRanges[i])
+    }
+
+    /// Bring a match into view.
+    ///
+    /// **Not `scrollRangeToVisible`.** That asks the layout manager where a
+    /// range is, and the answer is only meaningful once the range has been laid
+    /// out — on a brief longer than the panel, everything below the fold has
+    /// not been, so it scrolls nowhere. Forcing layout first is the fix, and
+    /// while we are here the rect gets padded so the match lands *inside* the
+    /// view rather than flush against its edge, where you would still have to
+    /// scroll to read the line it is on.
+    private func scrollToMatch(_ range: NSRange) {
+        guard let layout = layoutManager, let container = textContainer else { return }
+        layout.ensureLayout(for: container)
+        let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        rect.origin.x += textContainerInset.width
+        rect.origin.y += textContainerInset.height
+        // Roughly three lines of air either side.
+        rect = rect.insetBy(dx: 0, dy: -56)
+        // After the current layout pass: scrolling mid-pass is a no-op when the
+        // geometry it depends on is what the pass is still deciding.
+        DispatchQueue.main.async { [weak self] in self?.scrollToVisible(rect) }
+    }
+
+    /// Every other match, and the one you are on. Two colours because "12
+    /// matches" is only useful if you can tell which one you are looking at.
+    static let matchColour = NSColor.systemYellow.withAlphaComponent(0.28)
+    static let currentColour = NSColor.systemOrange.withAlphaComponent(0.75)
+
+    /// Light up the query's matches in place.
+    ///
+    /// **Measured against the RENDERED text, not the markdown source.** The two
+    /// differ — `## ` is gone, `**bold**` has lost its asterisks — so offsets
+    /// taken from the source would drift a little further out of place with
+    /// every marker above them. Searching the string that is actually on screen
+    /// means there is nothing to map.
+    ///
+    /// The whole attributed string is rebuilt for each new query rather than
+    /// having the last highlight stripped off: `removeAttribute(.backgroundColor)`
+    /// would also take the renderer's own backgrounds (code blocks, table
+    /// cells) with it, and a brief is a few kilobytes — cheap to render again.
+    @discardableResult
+    private static func highlight(_ query: String,
+                                  in text: NSMutableAttributedString) -> [NSRange] {
+        let plain = text.string
+        let offsets = DocumentSearch.matchOffsets(query, in: plain)
+        guard !offsets.isEmpty else { return [] }
+
+        // Character offsets → UTF-16, which is what NSRange counts in.
+        var utf16Start: [Int] = []
+        utf16Start.reserveCapacity(plain.count + 1)
+        var acc = 0
+        for ch in plain {
+            utf16Start.append(acc)
+            acc += ch.utf16.count
+        }
+        utf16Start.append(acc)
+
+        var ranges: [NSRange] = []
+        for run in DocumentSearch.runs(offsets) {
+            guard run.lowerBound < utf16Start.count, run.upperBound < utf16Start.count else { continue }
+            let location = utf16Start[run.lowerBound]
+            let length = utf16Start[run.upperBound] - location
+            guard length > 0, location + length <= text.length else { continue }
+            let range = NSRange(location: location, length: length)
+            text.addAttribute(.backgroundColor, value: matchColour, range: range)
+            ranges.append(range)
+        }
+        return ranges
     }
 
     /// Lay out at `width` and report the height used.
@@ -100,10 +222,77 @@ final class MarkdownNSTextView: NSTextView {
         return ceil(layout.usedRect(for: container).height)
     }
 
-    /// Let the enclosing SwiftUI `ScrollView` handle the wheel — the text view
-    /// is sized to its full content and never scrolls itself.
+    /// Let the enclosing SwiftUI `ScrollView` handle the wheel — when sized to
+    /// its full content, the text view never scrolls itself. Inside a real
+    /// `NSScrollView` (`MarkdownDocument`) it does, so the wheel stays put.
     override func scrollWheel(with event: NSEvent) {
-        nextResponder?.scrollWheel(with: event)
+        if enclosingScrollView != nil { super.scrollWheel(with: event) }
+        else { nextResponder?.scrollWheel(with: event) }
+    }
+}
+
+/// A whole document — brief plus notes — in **one scrolling text view**.
+///
+/// `MarkdownText` is sized to its content and scrolled by whatever SwiftUI
+/// container holds it, which is right for a pane made of several blocks and
+/// wrong for a find: `scrollRangeToVisible` needs a text view that owns its own
+/// scrolling, and a `ScrollViewReader` can only scroll to a view's id, never to
+/// a line inside one. So the palette's brief is a single view over the whole
+/// document, which is also what makes ⌘-dragging a selection across the brief
+/// and into a note work.
+struct MarkdownDocument: NSViewRepresentable {
+    let source: String
+    var find: String = ""
+    /// Which match is the current one.
+    var current: Int = 0
+    /// How many matches the find turned up — reported back because only the
+    /// rendered text knows.
+    var onMatchCount: (Int) -> Void = { _ in }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.contentInsets = NSEdgeInsets(top: 12, left: 0, bottom: 12, right: 0)
+
+        // The geometry a hosted text view needs and does not have by default: a
+        // real starting frame, an unbounded height to grow into, and a container
+        // that tracks its width. Without these it has no scrollable extent, so
+        // `scrollToVisible` has nowhere to go and the find silently stops
+        // scrolling — which is exactly how this shipped broken.
+        let text = MarkdownNSTextView()
+        text.frame = NSRect(origin: .zero, size: scroll.contentSize)
+        text.minSize = NSSize(width: 0, height: 0)
+        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                              height: CGFloat.greatestFiniteMagnitude)
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.autoresizingMask = [.width]
+        text.textContainer?.widthTracksTextView = true
+        text.textContainer?.containerSize = NSSize(width: scroll.contentSize.width,
+                                                   height: CGFloat.greatestFiniteMagnitude)
+        scroll.documentView = text
+        text.setMarkdown(source, find: find, current: current)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let text = scroll.documentView as? MarkdownNSTextView else { return }
+        // The clip view's width is only known after layout, and the text view
+        // has to follow it or the container wraps at the wrong width.
+        let width = scroll.contentSize.width
+        if width > 0, abs(text.frame.width - width) > 0.5 {
+            text.frame.size.width = width
+            text.textContainer?.containerSize = NSSize(width: width,
+                                                       height: CGFloat.greatestFiniteMagnitude)
+        }
+        text.setMarkdown(source, find: find, current: current)
+        let count = text.matchRanges.count
+        // Reporting during an update would mutate state mid-render.
+        DispatchQueue.main.async { onMatchCount(count) }
     }
 }
 

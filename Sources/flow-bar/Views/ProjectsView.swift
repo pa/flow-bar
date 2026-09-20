@@ -17,7 +17,24 @@ struct ProjectsView: View {
                 projectList
             }
         }
-        .onAppear { if store.metrics == nil { store.refreshMetrics() } }
+        .onAppear {
+            if store.metrics == nil { store.refreshMetrics() }
+            consumeDrill()
+        }
+        // The palette can ask for a project before `flow list projects` has
+        // landed. Rather than drop the request or invent a Project to show
+        // counts for, hold it until the read finishes and open then.
+        .onChange(of: store.metricsLoading) { consumeDrill() }
+    }
+
+    /// Open pre-drilled into a project the palette picked.
+    private func consumeDrill() {
+        guard let slug = store.pendingProjectDrill,
+              let p = store.metrics?.projects.first(where: { $0.slug == slug })
+        else { return }
+        store.pendingProjectDrill = nil
+        selected = p
+        store.loadProjectTasks(slug)
     }
 
     // MARK: List

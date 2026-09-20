@@ -25,6 +25,44 @@ if CommandLine.arguments.contains("--upgrade-script") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--palette") {
+    // Build the search-first root's index from REAL flow data and print how it
+    // ranks. The harness proves the ordering rules on fixtures; this is the
+    // other half — that the rules produce a sane list on an actual machine,
+    // which is the thing a fixture can never tell you.
+    let c = FlowClient()
+    let all       = (try? c.listTasks(includeDone: true, includeArchived: true)) ?? []
+    let projects  = (try? c.listProjects()) ?? []
+    let playbooks = (try? c.listPlaybooks()) ?? []
+    let owners    = (try? c.listOwners()) ?? []
+    let tags      = (try? c.listTags()) ?? []
+    let index = PaletteIndex.build(tasks: all, projects: projects, playbooks: playbooks,
+                                   owners: owners, tags: tags)
+    print("index: \(index.items.count) items "
+          + "(\(all.count) tasks, \(projects.count) projects, \(playbooks.count) playbooks, "
+          + "\(owners.count) owners, \(tags.count) tags, \(PaletteCommands.all.count) commands)")
+
+    print("\nhome (empty query)")
+    for section in index.home {
+        print("  \(section.title.uppercased())")
+        for item in section.items.prefix(6) {
+            print("    \(item.title)\(item.subtitle.map { "  — \($0)" } ?? "")")
+        }
+        if section.items.count > 6 { print("    … \(section.items.count - 6) more") }
+    }
+
+    let queries = CommandLine.arguments.drop { $0 != "--palette" }.dropFirst()
+    for q in (queries.isEmpty ? ["flow", "palette", "notch", "bar notch", "blocked"] : Array(queries)) {
+        let r = index.search(q)
+        print("\nsearch \"\(q)\" → \(r.count) result(s)")
+        for item in r.flat.prefix(5) {
+            print("    [\(item.kind.rawValue)] \(item.title)"
+                  + "\(item.subtitle.map { "  — \($0)" } ?? "")")
+        }
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--detach-test") {
     let dir = NSTemporaryDirectory() + "flowbar-detach-\(ProcessInfo.processInfo.processIdentifier)"
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)

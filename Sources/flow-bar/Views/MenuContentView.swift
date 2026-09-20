@@ -3,6 +3,9 @@ import SwiftUI
 
 /// App sections, shown as the left icon rail.
 enum Section: String, CaseIterable, Identifiable {
+    /// No `search` here on purpose: search is the ⌥Space panel's whole job, and a
+    /// second search surface inside the mouse-driven window is a second front
+    /// door to the same room. The popover browses; the panel searches.
     case dashboard, tasks, inbox, playbooks, projects, owners, tags, reminders
     var id: String { rawValue }
 
@@ -39,6 +42,9 @@ enum Section: String, CaseIterable, Identifiable {
         default: return false
         }
     }
+
+    /// What the field says before you type.
+    var searchPlaceholder: String { "Search \(title.lowercased())…" }
 }
 
 /// A navigation destination a dashboard tile can route to.
@@ -106,6 +112,8 @@ struct MenuContentView: View {
     /// popover open (the view is reused, so this is signalled via openNonce).
     private func prepareForOpen() {
         store.closePeek(); store.cancelCreate()
+        // The popover is the browsing half of the app — ⌥Space is where you go to
+        // search. Search is still on the rail, one click away.
         section = .tasks
         taskFilter = .inProgress
         taskSort = .priority
@@ -116,6 +124,11 @@ struct MenuContentView: View {
         if store.pendingReminderID != nil {
             section = .reminders
             store.loadReminderLinkTasks()
+        } else if let action = store.pendingPaletteAction {
+            // The centered palette ran something that needs this window — a
+            // section, a drill-in, the intake form. It closed; we carry it out.
+            store.pendingPaletteAction = nil
+            runPaletteAction(action)
         } else if store.pendingAttention {
             // The menubar icon was alerting, so that alert is why the popover
             // was opened — go straight to what is blocked. Cleared here rather
@@ -269,7 +282,7 @@ struct MenuContentView: View {
     private var searchBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(.secondary)
-            TextField("Search \(headerTitle.lowercased())…", text: $query)
+            TextField(section.searchPlaceholder, text: $query)
                 .textFieldStyle(.plain).font(.system(size: 16))
                 .focused($searchFocused)
                 .onSubmit {
@@ -422,9 +435,18 @@ struct MenuContentView: View {
                 }
                 .buttonStyle(.plain).help("Download and install v\(up.version)")
             } else {
-                Text("v\(store.currentVersion)")
-                    .font(.system(size: 12)).foregroundStyle(.tertiary)
-                    .help("flow-bar \(store.currentVersion)")
+                // The version is the one thing in the footer that can answer
+                // "what changed?", so it links to the notes for exactly this
+                // build rather than to a releases index you then have to search.
+                Button {
+                    NSWorkspace.shared.open(ReleaseLinks.url(forVersion: store.currentVersion))
+                } label: {
+                    Text("v\(store.currentVersion)")
+                        .font(.system(size: 12)).foregroundStyle(.tertiary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("What's new in v\(store.currentVersion) — opens the release notes")
             }
         }
     }
@@ -449,6 +471,61 @@ struct MenuContentView: View {
         case .tag(let t):
             store.pendingTagDrill = t   // TagsView opens pre-drilled into this tag
             jump(to: .tags)
+        }
+    }
+
+    /// Dispatch a palette row.
+    ///
+    /// Everything except `openTask` is navigation: the palette is a way *into*
+    /// the section views, not a replacement for them. Drill-in targets are
+    /// handed over as a `pending…` slug before the jump, the way the dashboard's
+    /// tag tiles already do it — the destination view consumes it in `onAppear`
+    /// and opens on that row instead of its list.
+    private func runPaletteAction(_ action: PaletteAction) {
+        switch action {
+        case .openTask(let slug):
+            // Same path as a click in any task list, ⌥-to-skip-prompts included.
+            store.switchTo(slug)
+        case .openTaskSkippingPrompts(let slug):
+            store.switchTo(slug, skipPermissions: true)
+        case .openBatch(let slugs):
+            store.switchToAll(slugs)
+        case .openProject(let slug):
+            store.pendingProjectDrill = slug
+            jump(to: .projects)
+        case .openPlaybook(let slug):
+            store.pendingPlaybookDrill = slug
+            jump(to: .playbooks)
+        case .openOwner(let slug):
+            store.pendingOwnerDrill = slug
+            jump(to: .owners)
+        case .openTag(let tag):
+            store.pendingTagDrill = tag
+            jump(to: .tags)
+        case .openReminder(let id):
+            store.pendingReminderID = id
+            jump(to: .reminders)
+        case .section(let raw):
+            // "backlog" is a filter on the Tasks pane rather than a pane of its
+            // own, so it has no rail section to jump to.
+            if raw == "backlog" { navigate(.tasks(.backlog)) }
+            else if let s = Section(rawValue: raw) { jump(to: s) }
+        case .releaseNotes:
+            // This window has no document reader; the palette does. Sending the
+            // published notes is the honest fallback.
+            store.markReleaseNotesSeen()
+            NSWorkspace.shared.open(ReleaseLinks.url(forVersion: store.currentVersion))
+        case .newTask:
+            store.beginCreate()
+        case .newReminder:
+            // Seeding the draft is enough: the root view already watches for
+            // one and lands on Reminders with the compose form open.
+            store.beginReminderBlank()
+        case .refresh:
+            store.refreshPalette()
+            store.refreshMetrics()
+        case .settings:
+            Store.openSettings()
         }
     }
 

@@ -33,6 +33,9 @@ public struct Playbook: Codable, Identifiable, Hashable, Sendable {
     public var slug: String
     public var project: String?
     public var id: String { slug }
+    public init(slug: String, project: String? = nil) {
+        self.slug = slug; self.project = project
+    }
 }
 
 /// A playbook run from `flow list runs --format json` (a task with

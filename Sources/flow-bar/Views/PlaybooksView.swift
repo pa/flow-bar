@@ -14,11 +14,24 @@ struct PlaybooksView: View {
 
     @State private var selected: Playbook?
 
+    /// Open pre-drilled into a playbook the palette picked.
+    private func consumeDrill() {
+        guard let slug = store.pendingPlaybookDrill,
+              let p = store.playbooks.first(where: { $0.slug == slug })
+        else { return }
+        store.pendingPlaybookDrill = nil
+        selected = p
+    }
+
     var body: some View {
         Group {
             if let p = selected { detail(p) } else { list }
         }
-        .onAppear { if store.playbooks.isEmpty { store.refreshPlaybooks() } }
+        .onAppear {
+            if store.playbooks.isEmpty { store.refreshPlaybooks() }
+            consumeDrill()
+        }
+        .onChange(of: store.playbooksLoading) { consumeDrill() }
     }
 
     private var playbooks: [Playbook] {

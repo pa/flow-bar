@@ -29,6 +29,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var sessionCancellable: AnyCancellable?
     private var settingsWindow: NSWindow?
 
+    /// The centered palette summoned by the global hotkey. Built on first use —
+    /// a session that never presses ⌥Space never pays for it.
+    private lazy var paletteController: PaletteWindowController = {
+        let controller = PaletteWindowController(store: store)
+        controller.onAction = { [weak self] in self?.runPaletteAction($0) }
+        controller.onHidden = { [weak self] in
+            guard let self, !self.popover.isShown else { return }
+            self.store.endActiveRefresh()
+        }
+        return controller
+    }()
+
     /// Real animated spinner shown in place of the icon while a terminal-
     /// spawning command runs.
     private lazy var spinner: NSProgressIndicator = {
@@ -114,8 +126,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // script relaunched us. Pick up its verdict now.
         store.reportLastUpgradeResult()
 
-        // Global hotkey (default ⌥⌘F) toggles the popover from anywhere.
-        HotKeyManager.shared.onFire = { [weak self] in self?.togglePopover() }
+        // Whether this launch is the first on a new version — which is the one
+        // moment "what's new" is worth saying.
+        store.refreshUnreadRelease()
+
+        // Global hotkey (default ⌥Space) summons the centered palette from
+        // anywhere. The menubar icon still opens the popover: the hotkey is for
+        // acting on one thing, the icon is for browsing everything.
+        HotKeyManager.shared.onFire = { [weak self] in self?.togglePalette() }
         HotKeyManager.shared.register(store.toggleShortcut)
 
         // Session alerts (opt-in): watch live harness sessions so the menubar
@@ -163,6 +181,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// shorter than a deliberate close-then-reopen. A real second click lands
     /// well outside it.
     private static let reopenSuppression: TimeInterval = 0.3
+
+    /// Summon (or dismiss) the centered palette.
+    @objc private func togglePalette() {
+        if popover.isShown { popover.performClose(nil) }
+        // Same re-resolve as the popover path: what opens should be what is
+        // true now, not what the watcher last saw.
+        store.sessionMonitor.refreshNow()
+        paletteController.toggle()
+    }
+
+    /// Carry out a palette result the panel could not.
+    ///
+    /// Opening a task is the one action that needs no window — that is the
+    /// point of the thing: type, Enter, and you are in the terminal tab.
+    /// Everything else is navigation, so it opens the popover and hands the
+    /// action to `MenuContentView`, which already knows how to run one.
+    private func runPaletteAction(_ action: PaletteAction) {
+        if case .openTask(let slug) = action {
+            store.switchTo(slug)
+            return
+        }
+        if case .openTaskSkippingPrompts(let slug) = action {
+            store.switchTo(slug, skipPermissions: true)
+            return
+        }
+        if case .openBatch(let slugs) = action {
+            store.switchToAll(slugs)
+            return
+        }
+        store.pendingPaletteAction = action
+        presentPopover()
+    }
+
+    /// Show the popover without toggling it closed, re-running `prepareForOpen`.
+    private func presentPopover() {
+        guard let button = statusItem.button else { return }
+        store.openNonce += 1
+        if !popover.isShown {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            installOutsideClickMonitor()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
+        store.beginActiveRefresh()
+    }
 
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
