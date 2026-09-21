@@ -338,6 +338,23 @@ row reads "flow-bar-notch - waiting on you".
   in `SelfSign.certScript`); CI release builds get `flow-bar-signing`. The cert
   does **not** need to be a trusted root — trust is required to *validate* a
   signature, not to produce one.
+  **The 5-minute cooldown in `SelfSign` is a loop guard, and a click is not a
+  loop.** It exists so a bundle that fails to sign does not relaunch forever; it
+  was also gating Settings' "Fix" button, and the window it covers — just after
+  a launch — is exactly when someone reads the warning and presses it. So the
+  button did nothing, said nothing, and looked broken every time. `attempt(force:)`
+  skips it and returns an `Outcome`; the row shows the reason, because the old
+  `bootstrap()` reported every failure by discarding a `Bool` and writing to
+  `NSLog`.
+- **A material needs a transparent window to be a material.** SwiftUI's
+  `Settings` scene hands back an ordinary opaque `NSWindow`, and
+  `VisualEffectBackground` blends `.behindWindow` — so dropping `PopoverSurface`
+  into it alone changes nothing: the blur has nothing to sample and you get the
+  flat fill underneath. `SettingsWindowGlass` clears the window's own background
+  and makes the title bar transparent (otherwise it is a glass panel wearing an
+  opaque hat). It reaches the window through a zero-size `NSViewRepresentable`
+  because the scene owns the window and never offers it — `viewDidMoveToWindow`
+  is the only moment it is in reach.
 - **Markdown selection needs one text view, not many.** SwiftUI's
   `.textSelection(.enabled)` selects within a single `Text`; a drag can never
   span two. The brief pane is therefore one `NSTextView` per block-group
@@ -474,6 +491,22 @@ Building locally is the entire point.
   is stale in one window is stale in the other and nobody should learn two sets
   of marks. A due badge needs flow's own `due_label`; given a date and no label
   it shows nothing rather than a guess.
+- **Home excludes archived work.** Home is built from the all-status list (that
+  is what makes search reach done and archived), and an archived task can still
+  carry `status: in-progress` — so without a filter it was listed under "In
+  progress" wearing an archive box, in the one view whose job is "what am I in
+  the middle of".
+- **Key caps are not `.rounded`.** SF Rounded has no `@` glyph, so the Commands
+  hint drew as an empty cap while every other key rendered fine. They also use
+  `Text(verbatim:)`, since `Text("…")` takes a `LocalizedStringKey` and `@` is
+  format-specifier syntax.
+- **A hint reads action-first, then one cap per key** (`Actions` `⌘` `K`).
+  `⌘K` set in a single chip reads as one key with a strange name; split, the caps
+  say what the hands do. Leading with the verb matches the order you think in —
+  you want to open something, then you look for how — so the footer is read left
+  to right instead of decoded symbol-first. `KeyCaps.split` is in the core with a
+  test, because the rule has an edge: the split is per-character *except* for a
+  run of ASCII letters, since `esc` is one physical key and must stay whole.
 - **A palette row carries no task name.** It was the subtitle (via
   `SessionRowLabel`), and on a real list it crowded the project and tags off the
   end of the line — `#aws #fram…` reads as a tag that does not exist. The slug
@@ -492,6 +525,86 @@ Building locally is the entire point.
   non-empty batch opens it — the popover's own rule that "a selection wins".
   Same five-task confirm threshold and same wording, because it is the same
   action. Esc unwinds it in order: confirm → query → selection → route → close.
+- **The footer is two zones and they never swap**: flat text on the left for
+  whatever this route happens to offer, one floating capsule on the right for
+  the primary action and `⌘K`. The shape carries the difference — a capsule says
+  "these are the controls", one more run of grey text says "these are more
+  labels". It was built per-branch first, so the capsule existed at the root and
+  nowhere else: in a brief the same two keys were flat, which is the tell that a
+  shape is decorative rather than meaningful. The capsule *is* the claim "these
+  two are always here", so it has to be always there — `hintsTrailing` is one
+  view for every route, and `primaryHint` is the only thing that varies.
+- **The brand mark at bottom-left opens an app menu** — What's new and
+  Settings…, titled with the running version, which is also where "About" went.
+  Refresh was in it and came out: it acts on the data, not on the app, and the
+  palette already refreshes on every open. **The mark is also where you are** —
+  inside a route the circle grows into a pill carrying that route's name, and
+  it is the *only* place that is said. A route chip used to sit in the field as
+  well, so one screen showed the same slug three times (chip, placeholder,
+  pill), and the chip was the worst of the three: it pushed the caret right on
+  every push, so the text you were typing started somewhere new depending on how
+  deep you had gone. The **scope** chip stays in the field, because it is not a
+  place — it is a mode the query is in.
+  Mark and shortcut capsule share `Theme.footerControl` and the same glass. They
+  sized themselves from their own content once, which put a 28pt circle beside a
+  34pt capsule on one baseline; two controls at two heights read as a mistake
+  rather than a hierarchy. **Two menus, split by the object they act on**: `⌘K` acts on the row in
+  front of you, the mark acts on flow-bar. Its entries are the same `@` commands
+  the keyboard already reaches, on purpose — before it existed there was no way
+  to *find* Settings, you had to know to type it, which is not something a
+  settings screen may assume about the person looking for it. It is a panel
+  rather than an `NSMenu` because the palette dismisses when it stops being key
+  and a system menu takes key away, so the menu would open onto a closing panel.
+- **The footer's left carries no keys at all** — the mark, and the find's state
+  inside a document. Everything that was there is taught by something better:
+  `esc` and `←` are the two keys nobody has to be told go back, and `⌥↵`
+  skip-prompts and `⌘J` pin are row actions that belong in `⌘K` with the other
+  eight. Naming two of ten in the footer only made the bar's contents look
+  arbitrary. The accepted cost is that `@` and the ⌘-hold are advertised nowhere
+  but the changelog — they were the two genuinely unteachable gestures, and this
+  trades their discovery for a bar that says one thing.
+- **No rules between the field, the list and the footer.** A divider says "the
+  list ends here", which is a lie whenever it scrolls. The list **fades out**
+  under the footer instead, and only when the content actually overflows —
+  fading the last row of a list that fits would be dimming something for no
+  reason, which is the tell that an effect is decoration rather than
+  information.
+- **`perform` is the one place that decides whether an action stays in the
+  panel**: an action carrying a route is navigation and is pushed, everything
+  else goes to the window layer. Both menus and `↵` go through it, which is why
+  "What's new" from the app menu opens the changelog *in* the palette — a menu
+  that leaves the panel to show something the panel can show is a different
+  feature wearing the same name.
+- **One action, one name, one key — and `⌥↵` opens whatever `↵` opens.** With a
+  batch selected `↵` opens the batch, so the batch *is* the primary entry; the
+  list used to carry a plain "Open ↵" as well as "Open all 3 selected", which
+  said one key did two things and gave the batch a second, keyless way to be
+  opened under a different name. Open already means "open what is selected", one
+  or many. The skip-prompts entry then has to move with it: left as a bare
+  "Open, skipping permission prompts" under "Open 8 selected", nothing on the row
+  said which of the two the skip applied to. Hence
+  `PaletteAction.openBatchSkippingPrompts`, and no liveness test on it — a batch
+  is a mix, the flag is inert on whichever members `flow do` answers by focusing
+  a running tab, and suppressing it would take it from the ones it does reach. A
+  test holds the invariant behind all of this: at most one entry may claim `↵`,
+  or the panel contradicts the bar directly beneath it.
+- **The footer shows the primary action and `⌘K`, never more.** Naming every key
+  there is what made it outgrow the window: hints were first cut to fit (so which
+  keys existed depended on the width), then wrapped to a second row — both
+  workarounds for listing N things in a space that holds two. `PaletteActions`
+  is the rest, built in one place, which is also what stops the panel and the
+  popover's right-click menu drifting. A row can gain a tenth action and the
+  footer does not notice.
+- **The jump list is a panel shown while ⌘ is *held*, not a section or a strip.**
+  As a section it competed with the results for rows — pinning a task that later
+  blocked moved it out of Needs-you while the menubar was orange — and it
+  vanished as soon as you typed, hiding `⌘1`–`⌘9` exactly when they are
+  reachable. As a strip inside the palette it was unreadable: nine chips across
+  700pt left ~40pt of text each, rendering three `frammer-*` tasks as three
+  identical `fram…`. A separate surface costs nothing when idle, so every pin
+  gets a full row. **A 350ms delay tells a hold from a chord** — `⌘K`/`⌘C`/`⌘1`
+  put ⌘ down for under a tenth of a second, and without it the panel flashed on
+  every shortcut in the app; any keypress while ⌘ is down cancels the reveal.
 - **The jump list is Harpoon, not recents** (`JumpList`, `⌘1…⌘9`, `⌘J` to
   pin/unpin). A recents list reorders itself every time you use it, so a thing's
   position is never the same twice and you must read before you can act. A jump
@@ -499,8 +612,11 @@ Building locally is the entire point.
   nothing here ever reorders it. Pins lead the home list in pin order, and the
   numbers fire from anywhere: three routes deep, mid-query. Capped at nine
   because the keys run out. Persisted **per flow root** (two roots are two
-  bodies of work). A pinned task that vanishes is pruned, because a number that
-  opens nothing is worse than one fewer number.
+  bodies of work). Pruning is against **`canOpen`, not existence**: a finished
+  task is still in the list flow returns, but its number would open nothing — so
+  done, archived and deleted fall under one rule. Pinning a finished task is
+  refused rather than accepted and silently undone by the next prune, and a
+  failed `flow` read never prunes, so a CLI hiccup cannot wipe the list.
 - **⌘-chords go through `performKeyEquivalent`, not `doCommandBy`.** A field
   editor turns keystrokes into *text commands* (`moveUp:`, `insertNewline:`) and
   ⌘1 is not one, so it never reaches the delegate. `PaletteTextField` overrides
@@ -513,12 +629,25 @@ Building locally is the entire point.
   and opening it retires the banner. The v0.5.0 entry doubles as the palette's
   key and command reference, which is why the whole file ships rather than one
   section.
-- **A leading sigil scopes the query**: `@` narrows the same list to commands
+- **A leading sigil scopes the query**: `@` narrows to commands, `#` to tags
   (`PaletteQuery`). It scopes rather than navigating, so backspacing it puts you
   back exactly where you were — the point of reaching for a character instead of
   a key. A sigil the index can't honour (no commands inside a route) is dropped
-  and its text searched, never matched literally. Only `@` exists on purpose:
-  every sigil is a character you can no longer start a search with.
+  and its text searched, never matched literally. They are added one at a time,
+  because every sigil is a character you can no longer start a search with: `@`
+  earns it because a command has to be known by name before it can be typed, `#`
+  because it is already how a tag is written on every row and in every brief, so
+  it is the character a hand reaches for anyway — and unscoped it merely matched
+  the `#` in every tag title at once. **The root placeholder names both**
+  (`PaletteQuery.rootPlaceholder`): a character you type first leaves no trace in
+  the UI, and since the footer stopped carrying hints there is nowhere else left
+  that could say so.
+- **Everything drawn as a control is one.** `⌘K Actions` sat in the footer
+  looking exactly like the primary beside it and did nothing when clicked, and
+  the two action panels highlighted only under the keyboard cursor — so the app
+  menu, which has no cursor, was a panel of inert-looking text. Both panels now
+  light a row on hover, which is also what keeps them one component instead of a
+  second, dimmer row style for the menu that has no keyboard.
 - **Inside a brief the field is a find that highlights in place**, with an
   editor's find bar: `n of m`, ∧∨ buttons, ↑↓ to step, wrapping. The brief is
   rendered as **one scrolling `MarkdownDocument`**, not a stack of
@@ -534,7 +663,10 @@ Building locally is the entire point.
   definition, and one dark letter mid-word reads as a rendering bug. Two
   colours — every match, and the one you are on — because a count is only
   useful if you can tell which one you are looking at. "no matches" is spelled
-  out, since nothing-found and not-looking render identically.
+  out, since nothing-found and not-looking render identically. The idle "type to
+  find" is *not*: the field's own placeholder already reads "Search <slug>'s
+  brief and notes…", so the footer's one line was being spent repeating the
+  instruction two inches above it.
 - **Skip-prompts is only offered where it can do anything.** On a task whose
   session is live — including a *blocked* one, which is live and stopped to ask
   you something — `flow do` focuses the running tab and returns before it builds
@@ -581,6 +713,12 @@ are findable only by typing.
   `Store.paletteDetail`, which is deliberately *not* the popover's
   `peekBrief`/`taskDetail` pair: two shells sharing one slot means whichever
   loads second wins.
+- **The panel is 750pt, which is Raycast's** — measured, not copied on taste.
+  Screenshotted side by side on one display, both windows centre on the same x,
+  so their pixel widths compare directly: 1497 against 1399 at 2x, i.e. 749pt
+  against 700pt. The extra 50 goes to the row, where a slug, a project and two
+  or three `#tags` compete for one line before anything truncates. The field row
+  is 64pt by the same measurement (Raycast's collapsed bar is 127px at 2x).
 - **The panel grows downward from a fixed top edge** (`PaletteGeometry`, in the
   core so the harness can prove it). A centred window would slide the field out
   from under the cursor you are typing into on every keystroke that changed the

@@ -34,7 +34,6 @@ struct VisualEffectBackground: NSViewRepresentable {
     /// translucent panel whatever is behind it — still glass, still sampling,
     /// but the contrast floor no longer depends on the user's wallpaper.
     var material: NSVisualEffectView.Material = .hudWindow
-
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
         v.material = material
@@ -48,6 +47,7 @@ struct VisualEffectBackground: NSViewRepresentable {
 
     func updateNSView(_ v: NSVisualEffectView, context: Context) {
         v.material = material
+        v.blendingMode = .behindWindow
         v.state = .active
     }
 }
@@ -95,6 +95,79 @@ extension View {
         #else
         self.background(fallback)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        #endif
+    }
+}
+
+/// Groups neighbouring glass elements so they sample one another.
+///
+/// **A correctness rule, not housekeeping.** Separate containers cannot sample
+/// each other's glass, so sibling elements refract inconsistently — chips in one
+/// row picking up different light. It is also where morphing comes from when
+/// elements appear and disappear, which the palette does constantly as hints
+/// change with the selected row.
+struct GlassGroup<Content: View>: View {
+    var spacing: CGFloat = 12
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        #if GLASS
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) { content }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+extension View {
+    /// A selected row: interactive glass at the palette's own radius.
+    ///
+    /// Separate from `railSelection`, which the popover's icon rail uses at a
+    /// tighter 7pt — the palette's rows are wider and want the rounder corner
+    /// the rest of its surfaces have.
+    @ViewBuilder
+    func glassSelection(isSelected: Bool, cornerRadius: CGFloat = 10) -> some View {
+        #if GLASS
+        if #available(macOS 26.0, *) {
+            if isSelected {
+                self.glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+            } else {
+                self.clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            }
+        } else {
+            self.background(isSelected ? Theme.accent.opacity(0.85) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        }
+        #else
+        self.background(isSelected ? Theme.accent.opacity(0.85) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        #endif
+    }
+}
+
+extension View {
+    /// A pill — the capsule form of `glassSurface`, for chips and badges.
+    ///
+    /// The rect helpers take a corner radius; a capsule has to be its own shape
+    /// or the radius stops matching the height as the font changes.
+    @ViewBuilder
+    func glassPill(fallback: Color, tinted: Bool = false) -> some View {
+        #if GLASS
+        if #available(macOS 26.0, *) {
+            if tinted {
+                self.glassEffect(.regular.tint(Theme.accent.opacity(0.5)), in: .capsule)
+            } else {
+                self.glassEffect(.regular, in: .capsule)
+            }
+        } else {
+            self.background(fallback).clipShape(Capsule())
+        }
+        #else
+        self.background(fallback).clipShape(Capsule())
         #endif
     }
 }

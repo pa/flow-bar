@@ -8,6 +8,11 @@ import SwiftUI
 /// drift is for each to draw its own row. They don't: this is the only place a
 /// `PaletteItem` becomes pixels.
 struct PaletteRow: View {
+    /// Whether the selection is the flat accent fill, which needs white text to
+    /// stay legible. Under glass the selection is translucent and the row's
+    /// normal colours read fine — forcing white there flattens it.
+    private var onFlatSelection: Bool { selected && !Theme.isGlass }
+
     let item: PaletteItem
     /// Character offsets into `item.title` that matched the query.
     var highlight: [Int] = []
@@ -26,19 +31,19 @@ struct PaletteRow: View {
             if checked {
                 Image(systemName: "checkmark.square.fill")
                     .font(.system(size: spacious ? 14 : 12))
-                    .foregroundStyle(selected ? Color.white : Theme.accent)
+                    .foregroundStyle(onFlatSelection ? Color.white : Theme.accent)
                     .frame(width: spacious ? 20 : 16)
             } else if let n = item.jumpNumber {
                 Text("\(n)")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(selected ? Color.white : Theme.accent)
+                    .foregroundStyle(onFlatSelection ? Color.white : Theme.accent)
                     .frame(width: spacious ? 20 : 16, height: 16)
                     .background(RoundedRectangle(cornerRadius: 4)
-                        .fill(selected ? Color.white.opacity(0.22) : Theme.accent.opacity(0.18)))
+                        .fill(onFlatSelection ? Color.white.opacity(0.22) : Theme.accent.opacity(0.18)))
             } else {
                 Image(systemName: icon)
                     .font(.system(size: spacious ? 15 : 13))
-                    .foregroundStyle(selected ? Color.white : .secondary)
+                    .foregroundStyle(onFlatSelection ? Color.white : .secondary)
                     .frame(width: spacious ? 20 : 16)
             }
             VStack(alignment: .leading, spacing: 1) {
@@ -51,7 +56,7 @@ struct PaletteRow: View {
                 if let sub = item.subtitle {
                     Text(sub)
                         .font(.system(size: spacious ? 13 : 12))
-                        .foregroundStyle(selected ? Color.white.opacity(0.75) : .secondary)
+                        .foregroundStyle(onFlatSelection ? Color.white.opacity(0.75) : .secondary)
                         .lineLimit(1)
                 }
                 if item.project != nil || !item.tags.isEmpty {
@@ -67,13 +72,13 @@ struct PaletteRow: View {
                                 Text(project).font(.system(size: spacious ? 12 : 11))
                             }
                             .lineLimit(1)
-                            .foregroundStyle(selected ? Color.white.opacity(0.7) : .secondary)
+                            .foregroundStyle(onFlatSelection ? Color.white.opacity(0.7) : .secondary)
                         }
                         ForEach(item.tags, id: \.self) { tag in
                             Text("#\(tag)")
                                 .font(.system(size: spacious ? 12 : 11))
                                 .lineLimit(1)
-                                .foregroundStyle(selected ? Color.white.opacity(0.6)
+                                .foregroundStyle(onFlatSelection ? Color.white.opacity(0.6)
                                                           : Color.secondary.opacity(0.7))
                         }
                     }
@@ -85,16 +90,24 @@ struct PaletteRow: View {
         .contentShape(Rectangle())
         .padding(.vertical, spacious ? 6 : 4)
         .padding(.horizontal, spacious ? 10 : 8)
-        .background {
+        // Glass on macOS 26, the flat accent fill below it — the same pair the
+        // rail already uses. On glass the selection is a *material*, so it reads
+        // as lifted rather than painted, and the row's own colours survive
+        // underneath instead of being flattened to white on blue.
+        .glassSelection(isSelected: selected)
+        // A hairline edge is what makes a translucent selection read as a
+        // raised surface rather than a lighter patch of background.
+        .overlay {
             if selected {
-                RoundedRectangle(cornerRadius: 7).fill(Theme.accent.opacity(0.85))
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.white.opacity(Theme.isGlass ? 0.14 : 0), lineWidth: 1)
             }
         }
         .padding(.horizontal, spacious ? 8 : 0)
     }
 
     private var title: AttributedString {
-        paletteHighlighted(item.title, offsets: highlight, selected: selected)
+        paletteHighlighted(item.title, offsets: highlight, selected: onFlatSelection)
     }
 
     /// The same marks the popover's `TaskRow` uses, in the same colours.
@@ -127,7 +140,7 @@ struct PaletteRow: View {
     private func glyph(_ symbol: String, _ colour: Color) -> some View {
         Image(systemName: symbol)
             .font(.system(size: 12))
-            .foregroundStyle(selected ? Color.white : colour)
+            .foregroundStyle(onFlatSelection ? Color.white : colour)
     }
 
     /// A command that jumps to a section borrows that section's rail icon, so

@@ -55,6 +55,10 @@ struct PaletteField: NSViewRepresentable {
     var onToggleJump: () -> Bool = { false }
     /// ⌘↵ — add the selected row to the multi-open batch.
     var onToggleSelection: () -> Bool = { false }
+    /// ⌘K — open or close the actions panel.
+    var onActions: () -> Bool = { false }
+    /// ⌘C — copy the selected row's slug.
+    var onCopy: () -> Bool = { false }
 
     func makeNSView(context: Context) -> NSTextField {
         let field = PaletteTextField(string: text)
@@ -92,6 +96,12 @@ struct PaletteField: NSViewRepresentable {
         guard mods == .command, let chars = event.charactersIgnoringModifiers else { return false }
         if let n = Int(chars), (1...9).contains(n) { return onJumpTo(n) }
         if chars.lowercased() == "j" { return onToggleJump() }
+        if chars.lowercased() == "k" { return onActions() }
+        // Only when nothing is selected in the field — otherwise ⌘C must stay a
+        // copy of what the user highlighted, which is what they meant.
+        if chars.lowercased() == "c", (focus.field?.currentEditor()?.selectedRange.length ?? 0) == 0 {
+            return onCopy()
+        }
         // ⌘↵ arrives as a key equivalent, not as `insertNewline:`.
         if event.keyCode == UInt16(kVK_Return) || chars == "\r" { return onToggleSelection() }
         return false

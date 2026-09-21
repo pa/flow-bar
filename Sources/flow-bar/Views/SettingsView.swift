@@ -10,6 +10,9 @@ struct SettingsView: View {
     /// and a Store-only observation would leave the slider's own readout stale
     /// while you drag it.
     @ObservedObject private var monitor: SessionMonitor
+    /// Why the last "Fix" did nothing. A repair that quietly fails is the same
+    /// as a broken button, and this one used to fail quietly by design.
+    @State private var repairError: String?
 
     init(store: Store) {
         self.store = store
@@ -122,10 +125,13 @@ struct SettingsView: View {
                     .font(.system(size: 12))
                 }
             }
-            .padding(22)
+            .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: 440, height: 460)
+        .frame(width: 460, height: 540)
+        // Lets the material run behind the title bar, so the window is one
+        // surface rather than a glass panel with an opaque strip on top.
+        .background(SettingsWindowGlass())
         // The toggle's value is captured once at Store init, so re-sync with the
         // real system state whenever Settings is shown — the user may have
         // changed it in System Settings, or macOS may have revoked it.
@@ -136,7 +142,7 @@ struct SettingsView: View {
             // than trusting what we saw at launch.
             monitor.refreshHookState()
         }
-        .background(Theme.bg)
+        .background(PopoverSurface())
         .preferredColorScheme(.dark)
     }
 
@@ -229,10 +235,24 @@ struct SettingsView: View {
                         Text("No").font(.system(size: 13))
                     }
                     .foregroundStyle(.orange)
-                    Button("Fix") { SelfSign.bootstrap() }
-                        .font(.system(size: 11)).buttonStyle(.link)
+                    // `force`: the cooldown behind `bootstrap` is a loop guard
+                    // for automatic relaunches, and a click is not a loop.
+                    Button("Fix") {
+                        switch SelfSign.attempt(force: true) {
+                        case .relaunching, .alreadySigned: repairError = nil
+                        case .failed(let why): repairError = why
+                        }
+                    }
+                    .font(.system(size: 11)).buttonStyle(.link)
                 }
             }
+        }
+        if let repairError {
+            HStack(alignment: .top, spacing: 5) {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                Text(repairError).font(.system(size: 11))
+            }
+            .foregroundStyle(.orange)
         }
         if SelfSign.isProtected {
             hint("flow-bar has a stable signature, so macOS keeps your permission to "
@@ -245,16 +265,64 @@ struct SettingsView: View {
         }
     }
 
+    /// A settings group: a label, then its controls on one glass card.
+    ///
+    /// **The card is what makes the grouping visible.** The settings were four
+    /// runs of controls separated by whitespace on a flat fill, so which hint
+    /// belonged to which toggle was decided by how close two things happened to
+    /// sit — and the window was the last surface in the app still painting
+    /// itself an opaque colour while every other one sampled what was behind it.
+    /// One `GlassGroup` per card, because separate containers cannot sample each
+    /// other's glass and siblings would refract inconsistently.
     private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased())
                 .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
                 .tracking(0.6)
-            content()
+                .padding(.leading, 2)
+            GlassGroup(spacing: 10) {
+                VStack(alignment: .leading, spacing: 10) { content() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .glassSurface(cornerRadius: 14, fallback: Theme.tile)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+                    }
+            }
         }
     }
 
     private func hint(_ text: String) -> some View {
         Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
+    }
+}
+
+/// Makes the Settings window able to *show* glass.
+///
+/// **A material needs a transparent window to be a material.** SwiftUI's
+/// `Settings` scene hands back an ordinary opaque `NSWindow`, and
+/// `VisualEffectBackground` blends `.behindWindow` — so the blur had nothing to
+/// sample and the panel rendered as the flat fill underneath it. Clearing the
+/// window's own background is what lets the desktop through; making the title
+/// bar transparent is what stops the result being a glass panel wearing an
+/// opaque hat.
+///
+/// It reaches the window through a zero-size view rather than an `NSWindow`
+/// subclass because the scene owns the window and never offers it to us —
+/// `viewDidMoveToWindow` is the only moment it is in reach.
+private struct SettingsWindowGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ v: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let w = window else { return }
+            w.isOpaque = false
+            w.backgroundColor = .clear
+            w.titlebarAppearsTransparent = true
+            w.appearance = NSAppearance(named: .darkAqua)
+        }
     }
 }

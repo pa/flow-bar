@@ -1905,26 +1905,61 @@ T.equal(JumpList(["a", "gone", "b"]).pruned(to: ["a", "b"]).slugs, ["a", "b"],
         "vanished tasks are pruned")
 T.equal(JumpList(["a", "gone", "b"]).pruned(to: ["a", "b"]).number(of: "b"), 2, "and renumbered")
 
-// On the home list it leads, in pin order — sorting it would destroy the
-// muscle memory that makes ⌘2 worth having.
+// The jump list is a STRIP, not a section: it never competes with the results
+// for rows, and it is visible while you type — which is when ⌘1–⌘9 are reachable
+// but a section would have vanished.
 do {
     let index = PaletteIndex.build(
         tasks: [task("zeta", status: "in-progress", live: true),
                 task("alpha", status: "in-progress")],
         jumpList: JumpList(["zeta", "alpha"]))
+    T.equal(index.pinned.map { $0.title }, ["zeta", "alpha"], "in pin order, not sorted")
+    T.equal(index.pinned.first?.jumpNumber, 1, "carrying its number")
+
     let home = index.search("")
-    T.equal(home.sections.first?.title, "Jump list", "it leads the home list")
-    T.equal(home.sections.first?.items.map { $0.title }, ["zeta", "alpha"],
-            "in pin order, not sorted")
-    T.equal(home.sections.first?.items.first?.jumpNumber, 1, "carrying its number")
-    T.expect(!home.sections.contains { $0.title == "Live sessions" },
-             "a pinned task is not also listed below — it appears once")
+    T.expect(!home.sections.contains { $0.title == "Jump list" },
+             "no Jump list section — the strip owns it")
+    // A pinned task still appears under whatever describes its state, which it
+    // could not when the jump list claimed it first.
+    T.equal(home.sections.first { $0.title == "Live sessions" }?.items.map { $0.title },
+            ["zeta"], "a pinned live task is still listed as live")
+    T.equal(home.sections.first { $0.title == "In progress" }?.items.map { $0.title },
+            ["alpha"], "…and a pinned in-progress one as in progress")
     // A number travels with the task wherever it shows up, including a search.
     T.equal(index.search("alpha").first?.jumpNumber, 2, "the number shows in search results too")
 }
-T.expect(PaletteIndex.build(tasks: [task("a", status: "in-progress")]).search("")
-            .sections.contains { $0.title == "Jump list" } == false,
-         "no pins, no section")
+T.expect(PaletteIndex.build(tasks: [task("a", status: "in-progress")]).pinned.isEmpty,
+         "no pins, no panel")
+
+// Edge cases. A number that opens nothing is worse than one fewer number, so
+// finishing a task takes it off the list — "still exists" is not the test,
+// "can still be opened" is.
+do {
+    var jump = JumpList(["shipped", "boxed", "alive"])
+    let openable: Set<String> = ["alive"]        // the other two are done/archived
+    jump = jump.pruned(to: openable)
+    T.equal(jump.slugs, ["alive"], "finished and archived pins are dropped")
+    T.equal(jump.number(of: "alive"), 1, "and what is left renumbers")
+}
+T.equal(JumpList(["a", "b", "c"]).pruned(to: ["a", "c"]).slugs, ["a", "c"],
+        "order survives a prune")
+T.equal(JumpList(["a"]).pruned(to: []).slugs, [], "everything can go")
+
+// …and pinning one in the first place is refused, rather than accepted and
+// silently undone by the next prune.
+do {
+    func item(_ status: String, archived: Bool = false) -> PaletteItem {
+        PaletteIndex.build(tasks: [task("t", status: status, archived: archived)],
+                           commands: []).items[0]
+    }
+    T.expect(item("in-progress").isPinnable, "live work can be pinned")
+    T.expect(item("backlog").isPinnable, "so can something not started")
+    T.expect(!item("done").isPinnable, "a finished task cannot")
+    T.expect(!item("in-progress", archived: true).isPinnable, "nor an archived one")
+    T.expect(!PaletteCommands.all[0].isPinnable, "and a command is not a task")
+}
+// The strip is not searchable: it is a fixed set of keys, not results.
+T.expect(PaletteIndex.of([]).pinned.isEmpty, "a route index has no strip")
 
 // A pinned task that BLOCKS must still appear under Needs-you. The menubar
 // goes orange for it, and a palette whose Needs-you section is empty while the
@@ -1942,6 +1977,135 @@ do {
     T.equal(home.sections.first?.title, "Needs you", "what needs answering leads")
     // Its jump number still rides along, so ⌘1 is unaffected.
     T.equal(needsYou?.items.first?.jumpNumber, 1, "the pin is still numbered")
+    // …and the strip shows it too, carrying the blocked mark — otherwise the
+    // strip would be the one place a stopped session looks fine.
+    let index = PaletteIndex.build(tasks: [blocked], blocked: ["amg-cost-opt"],
+                                   jumpList: JumpList(["amg-cost-opt"]))
+    T.equal(index.pinned.map { $0.title }, ["amg-cost-opt"], "the strip has it")
+    T.expect(index.pinned.first?.badges.contains(.blocked) == true, "…marked blocked")
+}
+
+// Home is built from the all-status list, and an archived task can still carry
+// status "in-progress" — so it turned up under "In progress" wearing an archive
+// box, in the one view whose job is "what am I in the middle of".
+do {
+    let home = PaletteIndex.build(tasks: [
+        task("live-one", status: "in-progress", live: true),
+        task("boxed", status: "in-progress", live: true, archived: true),
+        task("boxed-idle", status: "in-progress", archived: true),
+    ]).search("")
+    T.equal(home.sections.first { $0.title == "Live sessions" }?.items.map { $0.title },
+            ["live-one"], "an archived task is not listed as live")
+    T.expect(home.sections.first { $0.title == "In progress" } == nil,
+             "…nor as in progress")
+    // Still findable by typing, which is where done and archived work belongs.
+    T.equal(PaletteIndex.build(tasks: [task("boxed", status: "in-progress", archived: true)])
+                .search("boxed").first?.title,
+            "boxed", "search still reaches it")
+}
+
+print("\nKeyCaps")
+
+// A chord is a sequence of physical keys, so the footer draws one cap each.
+T.expect(KeyCaps.split("\u{2318}K") == ["\u{2318}", "K"], "a chord splits into its keys")
+T.expect(KeyCaps.split("\u{2325}\u{21B5}") == ["\u{2325}", "\u{21B5}"], "two symbols split too")
+T.expect(KeyCaps.split("\u{21B5}") == ["\u{21B5}"], "a lone key is one cap")
+// The reason the rule is not a plain per-character split: esc is one key.
+T.expect(KeyCaps.split("esc") == ["esc"], "a named key survives whole")
+// "@" is a key you press, and it is also the glyph SF Rounded lacks — the
+// reason this text is never rendered in a rounded font.
+T.expect(KeyCaps.split("@") == ["@"], "a punctuation key is one cap")
+
+print("\nPaletteActions")
+
+// The footer shows the primary action and ⌘K; everything else lives in this
+// list, so it is the thing that must be right.
+do {
+    let idx = PaletteIndex.build(
+        tasks: [task("live-task", status: "in-progress", live: true),
+                task("idle-task", status: "backlog"),
+                task("finished", status: "done")],
+        projects: [Project(slug: "proj", name: "proj", priority: "high", status: "active",
+                           total: 1, inProgress: 1, backlog: 0, done: 0, updated: nil)],
+        commands: PaletteCommands.all)
+    func item(_ id: String) -> PaletteItem { idx.items.first { $0.id == id }! }
+
+    let idle = PaletteActions.list(for: item("task:idle-task"))
+    T.equal(idle.first?.id, "open", "the primary action leads")
+    T.expect(idle.first?.isPrimary == true, "…and says so")
+    T.equal(idle.first?.shortcut, "↵", "with the key it already has")
+    T.expect(idle.contains { $0.id == "open-skip" }, "a task with no session can skip prompts")
+    T.expect(idle.contains { $0.id == "copy" }, "and its slug can be copied")
+    T.expect(idle.contains { $0.id == "pin" }, "and pinned")
+
+    // Same rule as the footer had: on a live task the flag never reaches the
+    // harness, so the action is not offered.
+    T.expect(!PaletteActions.list(for: item("task:live-task")).contains { $0.id == "open-skip" },
+             "a running session cannot be reopened with a different permission mode")
+    // A finished task can be copied and opened-in-name, but not pinned.
+    T.expect(!PaletteActions.list(for: item("task:finished")).contains { $0.id == "pin" },
+             "a finished task cannot be pinned")
+
+    // An action list that offers to take you where you already are is noise —
+    // and makes the reader doubt the rest of the list.
+    T.expect(PaletteActions.list(for: item("task:idle-task"),
+                                 context: .init(isViewingBrief: true))
+                .contains { $0.id == "brief" } == false,
+             "no \"View brief\" while the brief is on screen")
+    T.expect(PaletteActions.list(for: item("task:idle-task"),
+                                 context: .init(isViewingBrief: true))
+                .contains { $0.id == "copy-brief" },
+             "…but copying it still makes sense there")
+
+    // Containers have one thing to do.
+    let project = PaletteActions.list(for: item("project:proj"))
+    T.equal(project.count, 1, "a project offers only itself")
+    T.equal(project.first?.title, "Show contents", "named for what it does")
+
+    // Context drives the wording, so the panel never offers "Add" for something
+    // already added.
+    let pinned = PaletteActions.list(for: item("task:idle-task"),
+                                     context: .init(isPinned: true, isInBatch: true,
+                                                    batchCount: 2, batch: ["a", "b"]))
+    T.expect(pinned.contains { $0.title == "Remove from jump list" }, "unpin, not pin")
+    T.expect(pinned.contains { $0.title == "Remove from batch" }, "and remove, not add")
+
+    // **With a batch up, ↵ opens the batch — so the batch IS the primary.**
+    // The list used to carry a plain "Open ↵" as well, which said the same key
+    // did two different things, and gave the batch a second keyless way to be
+    // opened under a different name. Open already means "open what is
+    // selected", one or many.
+    T.expect(pinned.first?.title == "Open 2 selected", "a batch leads, as the primary")
+    T.expect(pinned.first?.shortcut == "↵", "…and it is what ↵ does")
+    T.expect(!pinned.contains { $0.title == "Open" }, "no second, keyless open")
+
+    // **⌥↵ opens whatever ↵ opens.** The two used to describe different things
+    // with a batch up — "Open 2 selected" over a bare "Open, skipping
+    // permission prompts" — and nothing said which the skip applied to.
+    let batchSkip = pinned.first { $0.shortcut == "⌥↵" }
+    T.equal(batchSkip?.title, "Open 2 selected, skipping permission prompts",
+            "the skip variant follows the primary onto the batch")
+    T.expect(batchSkip?.action == .openBatchSkippingPrompts(["a", "b"]),
+             "…and carries the batch, not the row")
+    // Without a batch the pair collapses back onto this one task.
+    let solo = PaletteActions.list(for: item("task:idle-task"))
+    T.equal(solo.first { $0.shortcut == "⌥↵" }?.title, "Open, skipping permission prompts",
+            "and back to the row when nothing is selected")
+
+    // The invariant behind both: the footer shows one primary, so at most one
+    // entry may claim ↵ or the panel contradicts the bar right under it.
+    for ctx in [PaletteActions.Context(),
+                .init(isPinned: true, isInBatch: true, batchCount: 2, batch: ["a", "b"]),
+                .init(batchCount: 1, batch: ["a"], isViewingBrief: true)] {
+        let list = PaletteActions.list(for: item("task:idle-task"), context: ctx)
+        T.equal(list.filter { $0.shortcut == "↵" }.count, 1, "exactly one entry owns ↵")
+        T.equal(list.filter { $0.isPrimary }.count, 1, "and exactly one is primary")
+    }
+
+    // The app menu is about flow-bar, not about a row — no task action leaks in.
+    let app = PaletteActions.appMenu()
+    T.expect(app.contains { $0.title == "Settings…" }, "settings has a home that isn't search")
+    T.expect(app.allSatisfy { !$0.isPrimary }, "nothing in it is what ↵ does")
 }
 
 print("\nPalette sigils")
@@ -1949,6 +2113,14 @@ print("\nPalette sigils")
 // `@` scopes the list to commands rather than pushing anywhere, so backspacing
 // it puts you back exactly where you were.
 T.equal(PaletteQuery.parse("@").scope, .command, "a leading @ scopes to commands")
+// `#` is how a tag is written everywhere else in the app, so it is the
+// character a hand reaches for anyway; unscoped it matched the `#` in every
+// tag title at once, which is not a search.
+T.equal(PaletteQuery.parse("#aws").scope, .tag, "a leading # scopes to tags")
+T.equal(PaletteQuery.parse("#aws").text, "aws", "…and the sigil is not matched on")
+// Only the first character counts, or a tag written inline stops being text.
+T.equal(PaletteQuery.parse("cost #aws").scope, nil, "a # mid-query is part of the query")
+T.equal(PaletteQuery.parse("cost #aws").text, "cost #aws", "…and survives whole")
 T.equal(PaletteQuery.parse("@set").text, "set", "…and is read off the query")
 T.expect(PaletteQuery.parse("set").scope == nil, "no sigil, no scope")
 T.expect(PaletteQuery.parse("user@example").scope == nil,

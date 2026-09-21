@@ -43,6 +43,18 @@ enum Theme {
     /// Segmented-control track.
     static let legacyTrack = Color(.sRGB, red: 0.060, green: 0.070, blue: 0.086, opacity: 1)
 
+    // MARK: Metrics
+
+    /// Height of the palette footer's two controls: the brand mark on the left
+    /// and the shortcut capsule on the right.
+    ///
+    /// **One constant because they are one row.** Each sized itself from its own
+    /// content, so the mark came out a 28pt circle beside a 34pt capsule — two
+    /// controls at two heights on the same baseline, which reads as a mistake
+    /// rather than a hierarchy. Anything that changes the padding inside either
+    /// one must not be able to move only one of them.
+    static let footerControl: CGFloat = 32
+
     // MARK: Surfaces
 
     /// Popover body. Transparent under glass so `VisualEffectBackground` shows;

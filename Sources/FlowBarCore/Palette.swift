@@ -86,6 +86,17 @@ public enum PaletteAction: Hashable, Sendable {
     case openTaskSkippingPrompts(String)
     /// Open several tasks at once — the multi-select batch.
     case openBatch([String])
+    /// The batch, with permission prompts skipped. A separate case for the same
+    /// reason `openTaskSkippingPrompts` is one: a clicked control cannot read a
+    /// modifier, because by the time its action runs whatever was held is gone.
+    case openBatchSkippingPrompts([String])
+    /// Put a string on the clipboard — a slug, a project name, a tag list.
+    case copy(String)
+    /// Put a task's whole brief and notes on the clipboard. Separate from
+    /// `copy` because the text isn't loaded until someone asks for it.
+    case copyBrief(String)
+    case togglePin(String)
+    case toggleBatch(String)
     case openProject(String)       // drill into the project's task list
     case openPlaybook(String)      // drill into the playbook's runs
     case openOwner(String)
@@ -122,11 +133,14 @@ public struct PaletteQuery: Equatable, Sendable {
 
     /// Sigils, and what they narrow to.
     ///
-    /// Only `@` for now, deliberately. Every sigil is a character you can no
-    /// longer type at the start of a search, so they are worth adding one at a
-    /// time and only where the thing they reach is otherwise hard to find —
-    /// commands are, because you have to know their names.
-    public static let sigils: [Character: PaletteKind] = ["@": .command]
+    /// Every sigil is a character you can no longer type at the start of a
+    /// search, so they are added one at a time and only where the thing they
+    /// reach is otherwise hard to find. `@` earns it because commands have to be
+    /// known by name before they can be typed. `#` earns it because it is
+    /// already how a tag is written everywhere else in the app — on a row, in a
+    /// brief's pills — so it is the character a hand reaches for anyway, and
+    /// unscoped it merely matched the `#` in every tag title at once.
+    public static let sigils: [Character: PaletteKind] = ["@": .command, "#": .tag]
 
     /// Read a leading sigil off a raw query. Only the first character counts:
     /// an `@` inside a word is part of the word.
@@ -136,6 +150,11 @@ public struct PaletteQuery: Equatable, Sendable {
         }
         return PaletteQuery(scope: scope, text: String(raw.dropFirst()))
     }
+
+    /// What the root field says it can do. It names the two sigils because
+    /// nothing else can: a character you type first leaves no trace in the UI,
+    /// and the footer no longer carries hints.
+    public static let rootPlaceholder = "Search, @ for commands, # for tags"
 
     /// The chip shown in the field while this scope is on.
     public var chip: String? { scope?.sectionTitle }
@@ -266,6 +285,19 @@ public extension PaletteItem {
 
     /// Whether ↵ navigates rather than doing something to the world.
     var entersOnPrimary: Bool { action.route != nil }
+
+    /// Whether this row can be pinned to the jump list.
+    ///
+    /// Only a task, and only one `flow do` could act on: pinning a finished or
+    /// archived task would hand it a number that opens nothing, and the next
+    /// prune would silently take it away again.
+    var isPinnable: Bool {
+        guard kind == .task else { return false }
+        if case .openTask = action {} else if case .openTaskSkippingPrompts = action {} else {
+            return false
+        }
+        return !badges.contains(.done) && !badges.contains(.archived)
+    }
 
     /// Whether a harness session is running for this row right now.
     ///
@@ -659,9 +691,23 @@ public struct PaletteIndex: Sendable {
     /// What an empty query shows.
     public var home: [PaletteSection]
 
-    public init(items: [PaletteItem] = [], home: [PaletteSection] = []) {
+    /// The jump list, in pin order.
+    ///
+    /// **Not a section of `home`, deliberately.** As a section it competed with
+    /// the results for rows — whichever claimed a task first owned it, so
+    /// pinning a task that later blocked moved its row out of Needs-you and
+    /// under a heading about navigation while the menubar was orange. A strip
+    /// cannot compete with anything. It is also visible while you type, where a
+    /// section is not: `⌘1`–`⌘9` fire from anywhere, so hiding the list the
+    /// moment you start typing hides the keys exactly when you would reach for
+    /// them.
+    public var pinned: [PaletteItem]
+
+    public init(items: [PaletteItem] = [], home: [PaletteSection] = [],
+                pinned: [PaletteItem] = []) {
         self.items = items
         self.home = home
+        self.pinned = pinned
     }
 
     // MARK: Build
@@ -734,11 +780,18 @@ public struct PaletteIndex: Sendable {
         }
         items.append(contentsOf: commands)
 
+        // In pin order, and outside `items`: the strip is a fixed set of keys,
+        // not something a query filters.
+        let byslug = Dictionary(tasks.map { ($0.slug, $0) }, uniquingKeysWith: { a, _ in a })
+        let pinned = jumpList.slugs.compactMap { byslug[$0] }
+            .map { item(for: $0, blocked: blocked.contains($0.slug), jump: jumpList) }
+
         return PaletteIndex(items: items,
                             home: homeSections(tasks: tasks, blocked: blocked,
                                                jumpList: jumpList,
                                                unreadRelease: unreadRelease,
-                                               commands: commands))
+                                               commands: commands),
+                            pinned: pinned)
     }
 
     /// One task's row. Rank encodes "how reachable is this right now", which is
@@ -805,23 +858,25 @@ public struct PaletteIndex: Sendable {
               .map { item(for: $0, blocked: blocked.contains($0.slug), jump: jumpList) }
         }
 
-        // **What needs answering is claimed first.** These `take` calls are
-        // order-sensitive: each one consumes the slugs it uses, so whichever
-        // runs first owns a task that qualifies for two sections. The jump list
-        // used to run first, which meant pinning a task that later blocked
-        // moved its row out of Needs-you and under a heading about navigation —
-        // the menubar went orange and the section the icon points at was empty.
-        // The pin is not lost by claiming it here: the row still carries its
-        // number, so ⌘2 is unaffected.
-        let needsYou = take(tasks.filter { blocked.contains($0.slug) }.sortedBySlug())
-
-        // Then the jump list, in the order you pinned it — that order is the
-        // whole point, and sorting it by anything would destroy the muscle
-        // memory that makes ⌘2 worth having.
-        let byslug = Dictionary(tasks.map { ($0.slug, $0) }, uniquingKeysWith: { a, _ in a })
-        let pinned = take(jumpList.slugs.compactMap { byslug[$0] })
-        let live = take(tasks.filter { $0.isLive }.sortedBySlug())
-        let rest = take(tasks.filter { $0.status == "in-progress" }.sortedByPriority())
+        // **These `take` calls are order-sensitive**: each consumes the slugs it
+        // uses, so whichever runs first owns a task that qualifies for two
+        // sections. What needs answering is claimed first, and leads.
+        //
+        // The jump list is NOT among them any more — it is a strip now
+        // (`PaletteIndex.pinned`), which is what stops it competing for rows at
+        // all. A pinned task appears here under whichever section describes its
+        // state, wearing its number.
+        // **Archived work is excluded everywhere here.** Home is built from the
+        // all-status list the palette loads (that is what makes search cover
+        // done and archived), and an archived task can still carry
+        // `status: in-progress` — so without this filter it was listed under
+        // "In progress", wearing an archive box, in the one view that is
+        // supposed to answer "what am I in the middle of". It stays findable by
+        // typing, which is where it belongs.
+        let active = tasks.filter { !$0.isArchived }
+        let needsYou = take(active.filter { blocked.contains($0.slug) }.sortedBySlug())
+        let live = take(active.filter { $0.isLive }.sortedBySlug())
+        let rest = take(active.filter { $0.status == "in-progress" }.sortedByPriority())
 
         var sections: [PaletteSection] = []
         // Needs-you leads whatever else is on screen: it is the only section the
@@ -841,7 +896,6 @@ public struct PaletteIndex: Sendable {
                             action: .releaseNotes),
             ]))
         }
-        if !pinned.isEmpty { sections.append(PaletteSection(title: "Jump list", items: pinned)) }
         if !live.isEmpty { sections.append(PaletteSection(title: "Live sessions", items: live)) }
         if !rest.isEmpty { sections.append(PaletteSection(title: "In progress", items: rest)) }
         sections.append(PaletteSection(title: "Commands", items: commands))

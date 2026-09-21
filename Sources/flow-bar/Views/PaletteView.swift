@@ -39,14 +39,24 @@ struct PaletteView: View {
     /// Find-in-brief state: which match is current, and how many there are.
     @State private var matchIndex = 0
     @State private var matchCount = 0
-    /// Briefly true when a pin was refused because the list is full.
-    @State private var jumpFull = false
+    /// Why a pin was just refused, shown briefly in the hint bar.
+    @State private var jumpRefused: String?
+    /// Measured: the hint bar wraps to a second row when the keys don't fit.
+    @State private var hintsHeight: CGFloat = 34
+    /// The ⌘K panel: whether it is up, and where its own cursor is.
+    @State private var actionsOpen = false
+    @State private var actionCursor = 0
+    /// The app menu behind the brand mark. Clicked, never keyed — every entry
+    /// in it is also an `@` command, which is the keyboard route.
+    @State private var appMenuOpen = false
     /// Opening N tasks spawns N sessions — past a handful, ask first.
     @State private var confirmingBulkOpen = false
     private static let bulkOpenConfirmThreshold = 5
 
     // Fixed parts of the layout; the body gets whatever is left.
-    private let fieldHeight: CGFloat = 60
+    // Measured against Raycast on the same display: its collapsed bar is 127px
+    // at 2x, so 63.5pt of field row.
+    private let fieldHeight: CGFloat = 64
     private let hintHeight: CGFloat = 34
     private let maxListHeight: CGFloat = 400
     private let emptyHeight: CGFloat = 112
@@ -61,7 +71,6 @@ struct PaletteView: View {
 
         return VStack(spacing: 0) {
             field
-            Divider().opacity(0.5)
             Group {
                 if route?.isDetail == true {
                     detail
@@ -72,18 +81,35 @@ struct PaletteView: View {
                 }
             }
             .frame(height: bodyHeight)
-            if !store.selectedTaskSlugs.isEmpty {
-                Divider().opacity(0.5)
-                selectionBar
-            }
-            Divider().opacity(0.5)
-            hints(count: flat.count)
+            .mask(bottomFade(bodyHeight, active: route?.isDetail != true
+                                         && contentHeight > bodyHeight + 1))
+
+            if !store.selectedTaskSlugs.isEmpty { selectionBar }
+            hints()
         }
         .background(PaletteSurface())
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 26))
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 26)
                 .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
+        }
+        .overlay(alignment: .bottomLeading) {
+            if appMenuOpen {
+                PaletteActionPanel(entries: PaletteActions.appMenu(),
+                                   title: "flow-bar \(AppInfo.version)") { entry in
+                    appMenuOpen = false
+                    perform(entry.action)
+                }
+                .padding(.leading, 12)
+                .padding(.bottom, max(hintsHeight, hintHeight) + 6)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if actionsOpen, !actions.isEmpty {
+                PaletteActionPanel(entries: actions, cursor: actionCursor) { runAction($0) }
+                    .padding(.trailing, 12)
+                    .padding(.bottom, max(hintsHeight, hintHeight) + 6)
+            }
         }
         // A fresh open is a fresh search — and a fresh stack. Coming back to
         // where you were three levels deep is not something anyone wants from a
@@ -92,11 +118,19 @@ struct PaletteView: View {
             query = ""
             cursor = 0
             stack = []
+            store.paletteReadingDocument = false
             focus.take()
         }
-        .onChange(of: query) { cursor = 0; matchIndex = 0 }
-        .onChange(of: fieldHeight + hintHeight + bodyHeight + 2) { _, h in onHeight(h) }
-        .onAppear { onHeight(fieldHeight + hintHeight + bodyHeight + 2) }
+        .onChange(of: query) {
+            cursor = 0; matchIndex = 0; actionsOpen = false; appMenuOpen = false
+        }
+        // The jump panel hides over a document; the ⌘1–⌘9 keys do not.
+        .onChange(of: route?.isDetail ?? false) { _, reading in
+            store.paletteReadingDocument = reading
+        }
+        .onChange(of: cursor) { actionsOpen = false; appMenuOpen = false }
+        .onChange(of: totalHeight(bodyHeight)) { _, h in onHeight(h) }
+        .onAppear { onHeight(totalHeight(bodyHeight)) }
     }
 
     // MARK: Contents
@@ -108,10 +142,14 @@ struct PaletteView: View {
     /// one of the answers. An empty query means "all of it" here, where at the
     /// root it means "what am I in the middle of".
     private var results: PaletteResults {
-        guard let route else { return store.palette.search(query) }
-        if route.isDetail { return PaletteResults(sections: []) }
-        let index = PaletteIndex.of(items(for: route))
-        return query.isEmpty ? index.listing(title: route.chip) : index.search(query)
+        // Memoised: every `selected`, the height, the cursor and the ⌘K list
+        // all derive from this, and the answer cannot change within a render.
+        store.memoisedResults(key: route.map { "route:\($0.chip)" } ?? "root", query: query) {
+            guard let route else { return store.palette.search(query) }
+            if route.isDetail { return PaletteResults(sections: []) }
+            let index = PaletteIndex.of(items(for: route))
+            return query.isEmpty ? index.listing(title: route.chip) : index.search(query)
+        }
     }
 
     private func items(for route: PaletteRoute) -> [PaletteItem] {
@@ -192,17 +230,21 @@ struct PaletteView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.secondary)
-            // One chip per level. Two is already deep for a thing you summoned
-            // to find one item, so a breadcrumb beats a single "back" label.
-            ForEach(Array(stack.enumerated()), id: \.offset) { _, r in
-                chip(r.chip)
+            // **Where you are is said once, at the bottom.** A route chip used
+            // to sit here too, so the same slug appeared three times on one
+            // screen — chip, placeholder, and the footer pill — and the one in
+            // the field was the worst of the three: it pushed the caret right on
+            // every push, so the text you were typing started somewhere new
+            // depending on how deep you had gone. The scope chip stays, because
+            // it is not a place; it is a mode the query is in, and a scoped list
+            // looks like a list that has mysteriously lost most of its rows
+            // unless something says so out loud.
+            if let scope = PaletteQuery.parse(query).chip {
+                GlassGroup(spacing: 8) { chip(scope) }
             }
-            // A scoped query looks like a list that has mysteriously lost most
-            // of its rows unless the scope says so out loud.
-            if let scope = PaletteQuery.parse(query).chip { chip(scope) }
             PaletteField(
                 text: $query,
-                placeholder: route?.placeholder ?? "Search tasks, projects, commands…",
+                placeholder: route?.placeholder ?? PaletteQuery.rootPlaceholder,
                 focus: focus,
                 onMove: { move($0) },
                 onJump: { jump($0) },
@@ -212,7 +254,17 @@ struct PaletteView: View {
                 onCancel: { cancel() },
                 onJumpTo: { jumpTo($0) },
                 onToggleJump: { toggleJump() },
-                onToggleSelection: { toggleSelection() })
+                onToggleSelection: { toggleSelection() },
+                onActions: { toggleActions() },
+                onCopy: { copySelectedSlug() })
+            // Transient messages live up here, beside the field — in the hint
+            // bar they shoved the keys around and truncated them, which is the
+            // opposite of what a hint bar is for.
+            if let jumpRefused {
+                Text(jumpRefused)
+                    .font(.system(size: 12)).foregroundStyle(.orange)
+                    .lineLimit(1).fixedSize()
+            }
             if isLoading { ProgressView().controlSize(.small) }
         }
         .padding(.horizontal, 18)
@@ -223,8 +275,8 @@ struct PaletteView: View {
         Text(text)
             .font(.system(size: 13, weight: .medium))
             .lineLimit(1)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(0.28)))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .glassPill(fallback: Theme.accent.opacity(0.28), tinted: true)
     }
 
     private var isLoading: Bool {
@@ -316,10 +368,20 @@ struct PaletteView: View {
     @ViewBuilder
     private var detail: some View {
         if let markdown = documentSource {
-            MarkdownDocument(source: markdown, find: query, current: matchIndex) {
-                if matchCount != $0 { matchCount = $0 }
+            VStack(alignment: .leading, spacing: 0) {
+                if case .task(let slug) = route {
+                    briefPills(slug).padding(.horizontal, 18)
+                }
+                // **No horizontal padding here.** The scroll view must span the
+                // full panel width or its overlay scroller draws 18pt in from
+                // the edge — inside the text column, on top of the last word of
+                // every long line. The text's own inset lives on its container
+                // instead (`MarkdownDocument`).
+                MarkdownDocument(source: markdown, find: query, current: matchIndex,
+                                 accentHeadings: true) {
+                    if matchCount != $0 { matchCount = $0 }
+                }
             }
-            .padding(.horizontal, 18)
         } else if store.paletteDetailLoading {
             ProgressView().controlSize(.small)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -357,7 +419,11 @@ struct PaletteView: View {
     /// a view, never a line inside one. The per-note tinted cards are the cost;
     /// a rule and a heading say the same thing in a document you are reading.
     private func documentMarkdown(_ d: TaskDetail) -> String {
-        var parts = ["# \(d.name)", "`\(d.slug)`"]
+        // Slug, project and tags are NOT in the document — they are pills
+        // above it (`briefPills`). In the prose they were another line to read;
+        // as pills they are a shape you recognise without reading, and they stay
+        // put while the document scrolls.
+        var parts = ["# \(d.name)"]
         let brief = TaskDetailView.dropLeadingTitle(d.brief)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         parts.append(brief.isEmpty ? "*No brief written for this task yet.*" : brief)
@@ -381,72 +447,142 @@ struct PaletteView: View {
 
     // MARK: Hints
 
-    private func hints(count: Int) -> some View {
-        HStack(spacing: 14) {
-            if route == .releaseNotes {
-                hint("←", query.isEmpty ? "Back" : "Clear") { collapse() }
-                if query.isEmpty {
-                    Text("type to find").font(.system(size: 12)).foregroundStyle(.tertiary)
-                } else if matchCount == 0 {
-                    Text("no matches").font(.system(size: 12)).foregroundStyle(.tertiary)
-                } else {
-                    findBar
+    /// The footer: what ↵ does, and the way to everything else.
+    ///
+    /// **One shape, every route.** The bar is two zones and they never swap:
+    /// flat text on the left for whatever this view happens to offer, and one
+    /// floating capsule on the right holding the primary action and `⌘K`. It
+    /// was built per-branch, so the capsule existed at the root and nowhere
+    /// else — the same two keys were a control in one view and a run of grey
+    /// labels in the next, which is exactly the tell that a shape is decorative
+    /// rather than meaningful. Here the capsule *is* the claim "these two are
+    /// always here", so it has to be always there.
+    ///
+    /// **Two items in it, never more.** Naming every key on the right is what
+    /// made this bar outgrow the window — hints were first cut to fit, so which
+    /// keys existed depended on the width, then wrapped to a second row. Behind
+    /// ⌘K a row can gain a tenth action and the footer does not notice.
+    private func hints() -> some View {
+        GlassGroup(spacing: 10) {
+            HStack(spacing: 14) {
+                AppMenuButton(isOpen: appMenuOpen, label: route?.chip) {
+                    appMenuOpen.toggle()
+                    actionsOpen = false
                 }
-            } else if case .task(let slug) = route {
-                // Clickable, because a modifier is invisible and this is the
-                // one place you have decided to open a specific task.
-                if store.paletteDetail?.canOpen != false {
-                    hint("↵", "Open") { onAction(.openTask(slug)) }
-                    // Only where it can do anything: on a live task `flow do`
-                    // focuses the running tab and returns before it builds a
-                    // command line, so the flag never reaches the harness.
-                    if !store.hasLiveSession(slug) {
-                        hint("⌥↵", "Skip prompts") { onAction(.openTaskSkippingPrompts(slug)) }
-                    }
-                }
-                if let slug = selectedTaskSlug {
-                    hint("⌘J", store.jumpList.contains(slug) ? "Unpin" : "Pin") {
-                        _ = toggleJump()
-                    }
-                }
-                hint("←", query.isEmpty ? "Back" : "Clear") { collapse() }
-                if query.isEmpty {
-                    Text("type to find").font(.system(size: 12)).foregroundStyle(.tertiary)
-                } else if matchCount == 0 {
-                    Text("no matches").font(.system(size: 12)).foregroundStyle(.tertiary)
-                } else {
-                    findBar
-                }
-            } else {
-                hint("↵", selectedEnters ? "Enter" : "Open")
-                if selectedCanSkipPrompts { hint("⌥↵", "Skip prompts") }
-                if let slug = selectedTaskSlug {
-                    hint("⌘J", store.jumpList.contains(slug) ? "Unpin" : "Pin")
-                    hint("⌘↵", store.selectedTaskSlugs.contains(slug) ? "Deselect" : "Select")
-                }
-                if selectedExpands { hint("→", "Brief") }
-                else if selectedEnters { hint("→", "Open") }
-                if !stack.isEmpty || !query.isEmpty {
-                    hint("←", query.isEmpty ? "Back" : "Clear")
-                }
-                hint("esc", escLabel)
-                // Only on an empty root: a sigil you have to be told about is
-                // worth one line of screen while there is nothing else to say.
-                if stack.isEmpty, query.isEmpty { hint("@", "Commands") }
-            }
-            Spacer()
-            if jumpFull {
-                Text("jump list is full (9)")
-                    .font(.system(size: 12)).foregroundStyle(.orange)
-            }
-            if count > 0, route?.isDetail != true {
-                Text("\(count)").font(.system(size: 12)).foregroundStyle(.tertiary)
+                hintsLeading
+                Spacer(minLength: 8)
+                hintsTrailing
             }
         }
-        .padding(.horizontal, 18)
-        .frame(height: hintHeight)
+        .padding(.horizontal, 18).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { hintsHeight = $0 }
     }
 
+    /// What is left on the left: the find's state, and nothing else.
+    ///
+    /// **Every key that used to sit here is taught by something better.** `esc`
+    /// and `←` are the two keys nobody has to be told go back. `⌥↵` skip-prompts
+    /// and `⌘J` pin are row actions, so they belong in `⌘K` with the other
+    /// eight — naming two of ten in the footer only made the bar's contents look
+    /// arbitrary. The accepted cost is that `@` and the ⌘-hold are no longer
+    /// advertised anywhere but the changelog; they were the two genuinely
+    /// unteachable gestures, and this trades their discovery for a bar that
+    /// says one thing.
+    @ViewBuilder
+    private var hintsLeading: some View {
+        if route?.isDetail == true { findState }
+    }
+
+    /// The list runs out under the footer rather than stopping at a rule.
+    ///
+    /// **A rule says "the list ends here", which is a lie whenever it scrolls.**
+    /// A fade says "there is more", and it says it in the same place the
+    /// scrollbar would if there were room for one. It is applied only when the
+    /// content actually overflows: fading the last row of a list that fits would
+    /// be dimming something for no reason, which is the tell that the effect is
+    /// decoration rather than information.
+    @ViewBuilder
+    private func bottomFade(_ height: CGFloat, active: Bool) -> some View {
+        if active, height > 0 {
+            let fade = min(34, height * 0.3)
+            LinearGradient(stops: [
+                .init(color: .black, location: (height - fade) / height),
+                .init(color: .black.opacity(0), location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        } else {
+            Color.black
+        }
+    }
+
+    /// Found nothing, or something to step through. **Nothing at all while the
+    /// query is empty**: "type to find" sat here, under a field whose own
+    /// placeholder already reads "Search <slug>'s brief and notes…", so the
+    /// footer's one line was spent repeating the instruction two inches above
+    /// it. What is left is the two states the placeholder cannot report.
+    @ViewBuilder
+    private var findState: some View {
+        if query.isEmpty {
+            EmptyView()
+        } else if matchCount == 0 {
+            Text("no matches").font(.system(size: 12)).foregroundStyle(.tertiary)
+        } else {
+            findBar
+        }
+    }
+
+    /// The two things that are always here, in their own floating capsule — the
+    /// shape says "these are the controls", where one more run of grey text
+    /// says "these are more labels".
+    @ViewBuilder
+    private var hintsTrailing: some View {
+        let primary = primaryHint
+        if primary != nil || !actions.isEmpty {
+            HStack(spacing: 14) {
+                if let primary {
+                    hint("↵", primary.label, action: primary.run)
+                    if !actions.isEmpty { Divider().frame(height: 14).opacity(0.35) }
+                }
+                // **Clickable, like everything else in this bar.** It was the
+                // one control drawn as a control and wired as a caption: it
+                // looks exactly like the primary beside it, which is a promise,
+                // and clicking it did nothing.
+                if !actions.isEmpty { hint("⌘K", "Actions") { _ = toggleActions() } }
+            }
+            .frame(height: Theme.footerControl)
+            .padding(.horizontal, 12)
+            .glassSurface(cornerRadius: Theme.footerControl / 2, fallback: Theme.chip)
+        }
+    }
+
+    /// What ↵ does here, and — where ↵ is also a thing you might click — how to
+    /// do it. Nil in a document, which has nothing to open.
+    private var primaryHint: (label: String, run: (() -> Void)?)? {
+        if actionsOpen {
+            return ("Run", { if let e = actions[safe: actionCursor] { runAction(e) } })
+        }
+        if case .task(let slug) = route {
+            guard store.paletteDetail?.canOpen != false else { return nil }
+            return ("Open", { onAction(.openTask(slug)) })
+        }
+        if route == .releaseNotes { return nil }
+        return (primaryLabel, { submit() })
+    }
+
+    private func totalHeight(_ body: CGFloat) -> CGFloat {
+        fieldHeight + body + max(hintsHeight, hintHeight) + 2
+            + (store.selectedTaskSlugs.isEmpty ? 0 : 31)
+    }
+
+    /// The jump list: one row of numbered chips, always on screen.
+    ///
+    /// **A strip rather than a section**, for two reasons that only showed up in
+    /// use. As a section it competed with the results for rows, so pinning a
+    /// task that later blocked moved its row out of Needs-you while the menubar
+    /// was orange. And a section only renders on an empty query, which hid the
+    /// list the moment you started typing — while `⌘1`–`⌘9` kept working from
+    /// anywhere. A key you cannot see when you would reach for it is a key you
+    /// do not use.
     /// What is in the batch, and the two things you can do with it.
     private var selectionBar: some View {
         let n = store.selectedTaskSlugs.count
@@ -497,6 +633,100 @@ struct PaletteView: View {
         return true
     }
 
+    /// What ↵ does to the row in front of you, in one word.
+    private var primaryLabel: String {
+        if !store.selectedTaskSlugs.isEmpty { return "Open \(store.selectedTaskSlugs.count)" }
+        return selectedEnters ? "Enter" : "Open"
+    }
+
+    /// The task's identifying facts, as pills above the document.
+    ///
+    /// **Shape rather than colour.** A slug, a project and a tag are three
+    /// different kinds of thing, and the difference has to survive a glance.
+    /// Colour-coding them was tried and read as decoration; a pill is a shape
+    /// you recognise without reading it, and it costs no palette to learn.
+    /// They sit outside the scroll view, so they stay put while the brief moves.
+    @ViewBuilder
+    private func briefPills(_ slug: String) -> some View {
+        // No slug pill: the footer's mark carries it, and the placeholder says
+        // it again. Saying it a third time is not emphasis, it is noise.
+        let item = paletteItem(for: slug)
+        GlassGroup(spacing: 8) {
+            WrapLayout(spacing: 6, lineSpacing: 4) {
+                if let project = item?.project { pill(project, icon: "folder") }
+                ForEach(item?.tags ?? [], id: \.self) { tag in
+                    pill("#\(tag)", icon: nil)
+                }
+            }
+        }
+        // Equal above and below: the row sat 10pt from the field and 2pt from
+        // the document, so it read as part of the text rather than a header.
+        .padding(.vertical, 10)
+        .opacity(item?.project == nil && (item?.tags.isEmpty ?? true) ? 0 : 1)
+    }
+
+    private func pill(_ text: String, icon: String?) -> some View {
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon).font(.system(size: 9))
+            }
+            Text(text)
+                .font(.system(size: 12))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .glassPill(fallback: Theme.chip)
+    }
+
+    /// The palette's row for a slug, for facts the `TaskDetail` doesn't carry.
+    private func paletteItem(for slug: String) -> PaletteItem? {
+        store.palette.items.first { $0.id == "task:\(slug)" }
+    }
+
+    /// The actions for whatever is in front of you — the selected row, or the
+    /// brief you are reading. A brief is a place you have *already* chosen a
+    /// task, so it is if anything the more likely place to want them.
+    private var actions: [PaletteActions.Entry] {
+        let item: PaletteItem?
+        if case .task(let slug) = route { item = paletteItem(for: slug) }
+        else if route?.isDetail == true { item = nil }
+        else { item = selected }
+        guard let item else { return [] }
+        let slug = selectedTaskSlug ?? routeTaskSlug
+        return PaletteActions.list(for: item, context: .init(
+            isPinned: slug.map { store.jumpList.contains($0) } ?? false,
+            isInBatch: slug.map { store.selectedTaskSlugs.contains($0) } ?? false,
+            batchCount: store.selectedTaskSlugs.count,
+            batch: store.orderedSelection,
+            isViewingBrief: route?.isDetail == true))
+    }
+
+    private func runAction(_ entry: PaletteActions.Entry) {
+        actionsOpen = false
+        // "View brief" is navigation inside the palette, not something to hand
+        // to the window layer.
+        if entry.id == "brief" { expand(); return }
+        switch entry.action {
+        case .togglePin(let slug): _ = store.toggleJump(slug)
+        case .toggleBatch(let slug): store.toggleSelection(slug)
+        default: perform(entry.action)
+        }
+    }
+
+    private func toggleActions() -> Bool {
+        guard !actions.isEmpty else { return false }
+        actionsOpen.toggle()
+        actionCursor = 0
+        return true
+    }
+
+    private func copySelectedSlug() -> Bool {
+        guard let slug = selectedTaskSlug else { return false }
+        store.copyToPasteboard(slug)
+        return true
+    }
+
     /// Count and step, the way every editor's find does it.
     private var findBar: some View {
         HStack(spacing: 6) {
@@ -514,12 +744,6 @@ struct PaletteView: View {
             }
             .buttonStyle(.plain).help("Next match (↓)")
         }
-    }
-
-    private var escLabel: String {
-        if !query.isEmpty { return "Clear" }
-        if !store.selectedTaskSlugs.isEmpty { return "Deselect" }
-        return stack.isEmpty ? "Close" : "Back"
     }
 
     private var selected: PaletteItem? {
@@ -551,17 +775,36 @@ struct PaletteView: View {
         return !s.entersOnPrimary && s.detailRoute != nil
     }
 
-    /// A keyboard hint. Given an action it becomes a button, so the same thing
-    /// is reachable by key or by mouse without a second control existing.
+    /// A keyboard hint: what it does, then the keys that do it.
+    ///
+    /// **The action is named first, and a chord is one cap per key.** `⌘K` set
+    /// in a single chip reads as one key with an odd name; two caps say what the
+    /// hands do. Leading with the verb matches the order you think in — you want
+    /// to open something, then you look for how — and it is why the footer can
+    /// be read left to right without decoding symbols first.
     @ViewBuilder
     private func hint(_ key: String, _ label: String,
                       action: (() -> Void)? = nil) -> some View {
         let content = HStack(spacing: 5) {
-            Text(key)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.chip))
-            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(label)
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .lineLimit(1).fixedSize()
+            HStack(spacing: 3) {
+                ForEach(KeyCaps.split(key), id: \.self) { cap in
+                    // `verbatim`, because `Text("…")` takes a
+                    // LocalizedStringKey and the format parser eats a bare "@" —
+                    // the Commands hint rendered as an empty cap while every
+                    // other key showed fine. **Not `.rounded`** either: SF
+                    // Rounded has no "@" glyph at all.
+                    Text(verbatim: cap)
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(minWidth: 12)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Theme.chip))
+                        .overlay(RoundedRectangle(cornerRadius: 5)
+                            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+                }
+            }
         }
         if let action {
             Button(action: action) { content.contentShape(Rectangle()) }
@@ -616,13 +859,28 @@ struct PaletteView: View {
     }
 
     /// ↵ — enter a container, or act on the world.
-    private func activate(_ item: PaletteItem) {
-        if let route = item.action.route { push(route) } else { onAction(item.action) }
+    private func activate(_ item: PaletteItem) { perform(item.action) }
+
+    /// **The one place that decides whether an action stays in the panel.**
+    /// An action carrying a route is navigation and is pushed here; everything
+    /// else is handed to the window layer. Both menus and ↵ go through it, which
+    /// is why "What's new" from the app menu now opens the changelog *in* the
+    /// palette — reached any other way it always had, and a menu that leaves the
+    /// panel to show something the panel can show is a different feature wearing
+    /// the same name.
+    private func perform(_ action: PaletteAction) {
+        if let route = action.route { push(route) } else { onAction(action) }
     }
 
     // MARK: Keyboard
 
     private func move(_ delta: Int) {
+        // While the actions panel is up it owns the arrows — there is only ever
+        // one list taking the keyboard.
+        if actionsOpen {
+            actionCursor = min(max(actionCursor + delta, 0), max(actions.count - 1, 0))
+            return
+        }
         if route?.isDetail == true { stepMatch(delta); return }
         let n = rowCount
         guard n > 0 else { return }
@@ -642,6 +900,10 @@ struct PaletteView: View {
     }
 
     private func submit() {
+        if actionsOpen {
+            if let entry = actions[safe: actionCursor] { runAction(entry) }
+            return
+        }
         // A non-empty selection wins: ↵ commits the thing you have been
         // building, which the selection bar makes visible. Same rule as the
         // popover's search field.
@@ -679,15 +941,32 @@ struct PaletteView: View {
     /// ⌘J — pin or unpin the selected task.
     private func toggleJump() -> Bool {
         guard let slug = selectedTaskSlug else { return false }
-        let change = store.toggleJump(slug)
-        if case .full = change {
-            jumpFull = true
+        // Pinning something finished would hand it a number that opens nothing,
+        // and the next prune would take it away again — refuse rather than
+        // accept and quietly undo. Unpinning always works.
+        guard store.jumpList.contains(slug) || store.isOpenable(slug) else {
+            jumpRefused = "that task is finished — nothing to jump to"
             Task {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                jumpFull = false
+                jumpRefused = nil
+            }
+            return true
+        }
+        let change = store.toggleJump(slug)
+        if case .full = change {
+            jumpRefused = "jump list is full (9)"
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                jumpRefused = nil
             }
         }
         return true
+    }
+
+    /// The slug of the brief being read, if that is where you are.
+    private var routeTaskSlug: String? {
+        if case .task(let slug) = route { return slug }
+        return nil
     }
 
     /// The slug of whatever a jump action would act on: the selected row, or
@@ -712,7 +991,9 @@ struct PaletteView: View {
     /// Esc unwinds the same way, and closes the panel once there is nothing
     /// left to unwind. A wrong query is far more common than a wrong summon.
     private func cancel() {
-        if confirmingBulkOpen { confirmingBulkOpen = false }
+        if appMenuOpen { appMenuOpen = false }
+        else if actionsOpen { actionsOpen = false }
+        else if confirmingBulkOpen { confirmingBulkOpen = false }
         else if !query.isEmpty { query = ""; cursor = 0 }
         else if !store.selectedTaskSlugs.isEmpty { store.clearSelection() }
         else if !stack.isEmpty { pop() }

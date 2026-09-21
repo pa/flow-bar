@@ -60,6 +60,7 @@ struct MarkdownText: NSViewRepresentable {
 final class MarkdownNSTextView: NSTextView {
     private var rendered: String?
     private var highlighted: String?
+    private var accented = false
 
     init() {
         let storage = NSTextStorage()
@@ -107,10 +108,24 @@ final class MarkdownNSTextView: NSTextView {
     /// changelog eight times while someone types "palette" is not.
     private var base: NSAttributedString?
 
-    func setMarkdown(_ source: String, find: String = "", current: Int = 0) {
-        if rendered != source {
+    /// One blue for every `### ` heading.
+    ///
+    /// In a brief those are the dated update notes, and a wall of same-weight
+    /// headings means scanning for the one you remember is reading every date.
+    /// A single accent makes them landmarks. **One colour, not a palette** — a
+    /// per-note colour was tried and read as decoration rather than structure,
+    /// because it asked you to learn a mapping before it paid anything back.
+    static let headingAccent = NSColor.systemBlue
+
+    func setMarkdown(_ source: String, find: String = "", current: Int = 0,
+                     accentHeadings: Bool = false) {
+        if rendered != source || accented != accentHeadings {
             rendered = source
-            base = MarkdownRenderer.attributed(source)
+            accented = accentHeadings
+            let text = NSMutableAttributedString(
+                attributedString: MarkdownRenderer.attributed(source))
+            if accentHeadings { Self.accent(headingsOf: source, in: text) }
+            base = text
             highlighted = nil
         }
         if highlighted != find {
@@ -184,6 +199,28 @@ final class MarkdownNSTextView: NSTextView {
     /// having the last highlight stripped off: `removeAttribute(.backgroundColor)`
     /// would also take the renderer's own backgrounds (code blocks, table
     /// cells) with it, and a brief is a few kilobytes — cheap to render again.
+    /// Tint each `### ` heading.
+    ///
+    /// Matched against the RENDERED text, not the source — by then `### ` is
+    /// gone, so offsets taken from the source drift by four characters per
+    /// marker above them. Searching only forward means two notes that share a
+    /// title cannot both be painted at the first one's position.
+    private static func accent(headingsOf source: String,
+                               in text: NSMutableAttributedString) {
+        let plain = text.string as NSString
+        var searched = 0
+        for line in source.components(separatedBy: .newlines) {
+            guard line.hasPrefix("### ") else { continue }
+            let title = String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+            guard !title.isEmpty else { continue }
+            let rest = NSRange(location: searched, length: plain.length - searched)
+            let found = plain.range(of: title, options: [], range: rest)
+            guard found.location != NSNotFound else { continue }
+            text.addAttribute(.foregroundColor, value: headingAccent, range: found)
+            searched = found.location + found.length
+        }
+    }
+
     @discardableResult
     private static func highlight(_ query: String,
                                   in text: NSMutableAttributedString) -> [NSRange] {
@@ -241,10 +278,19 @@ final class MarkdownNSTextView: NSTextView {
 /// document, which is also what makes ⌘-dragging a selection across the brief
 /// and into a note work.
 struct MarkdownDocument: NSViewRepresentable {
+    /// The text's own left inset. The scroll view spans the full width so its
+    /// scroller sits at the panel's edge; the column is inset from inside.
+    private static let leading: CGFloat = 18
+    /// Kept clear on the right: the scroller's lane plus the same visual margin
+    /// the left has, so a long line stops before the knob rather than under it.
+    private static let gutter: CGFloat = 30
+
     let source: String
     var find: String = ""
     /// Which match is the current one.
     var current: Int = 0
+    /// Tint `### ` headings — the dated update notes in a brief.
+    var accentHeadings: Bool = false
     /// How many matches the find turned up — reported back because only the
     /// rendered text knows.
     var onMatchCount: (Int) -> Void = { _ in }
@@ -256,7 +302,13 @@ struct MarkdownDocument: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
-        scroll.contentInsets = NSEdgeInsets(top: 12, left: 0, bottom: 12, right: 0)
+        // **Padding belongs to the text, not the scroll view.** Content insets
+        // move the scroller too, so it started 12pt down and stopped 12pt short
+        // — a floating bar that didn't line up with the list's scroller in the
+        // panel above. With the insets on the text container instead, the
+        // scroller runs the full height exactly like the palette's.
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
         // The geometry a hosted text view needs and does not have by default: a
         // real starting frame, an unbounded height to grow into, and a container
@@ -268,14 +320,16 @@ struct MarkdownDocument: NSViewRepresentable {
         text.minSize = NSSize(width: 0, height: 0)
         text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                               height: CGFloat.greatestFiniteMagnitude)
+        text.textContainerInset = NSSize(width: Self.leading, height: 10)
         text.isVerticallyResizable = true
         text.isHorizontallyResizable = false
         text.autoresizingMask = [.width]
         text.textContainer?.widthTracksTextView = true
-        text.textContainer?.containerSize = NSSize(width: scroll.contentSize.width,
-                                                   height: CGFloat.greatestFiniteMagnitude)
+        text.textContainer?.containerSize = NSSize(
+            width: scroll.contentSize.width - Self.leading - Self.gutter,
+            height: CGFloat.greatestFiniteMagnitude)
         scroll.documentView = text
-        text.setMarkdown(source, find: find, current: current)
+        text.setMarkdown(source, find: find, current: current, accentHeadings: accentHeadings)
         return scroll
     }
 
@@ -286,10 +340,11 @@ struct MarkdownDocument: NSViewRepresentable {
         let width = scroll.contentSize.width
         if width > 0, abs(text.frame.width - width) > 0.5 {
             text.frame.size.width = width
-            text.textContainer?.containerSize = NSSize(width: width,
-                                                       height: CGFloat.greatestFiniteMagnitude)
+            text.textContainer?.containerSize = NSSize(
+                width: width - Self.leading - Self.gutter,
+                height: CGFloat.greatestFiniteMagnitude)
         }
-        text.setMarkdown(source, find: find, current: current)
+        text.setMarkdown(source, find: find, current: current, accentHeadings: accentHeadings)
         let count = text.matchRanges.count
         // Reporting during an update would mutate state mid-render.
         DispatchQueue.main.async { onMatchCount(count) }
