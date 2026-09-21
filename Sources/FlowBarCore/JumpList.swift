@@ -66,11 +66,18 @@ public struct JumpList: Equatable, Sendable, Codable {
         slugs.removeAll { $0 == slug }
     }
 
-    /// Drop anything that no longer exists.
+    /// Drop anything a number can no longer open.
     ///
-    /// A pinned task can be deleted or archived out from under the list, and a
-    /// number that opens nothing is worse than one fewer number.
-    public func pruned(to existing: Set<String>) -> JumpList {
-        JumpList(slugs.filter { existing.contains($0) })
+    /// **Not just "still exists" — still *openable*.** A task that is finished
+    /// or archived is still in the list `flow` returns, but `flow do` has
+    /// nothing to switch to, so its number would sit there doing nothing. The
+    /// caller passes the slugs that can actually be opened
+    /// (`FlowTask.canOpen`), which covers done, archived and deleted in one
+    /// rule.
+    ///
+    /// Renumbering after a removal is unavoidable and deliberate: holes would
+    /// mean a `⌘4` that does nothing, which is worse than a `⌘4` that moved.
+    public func pruned(to openable: Set<String>) -> JumpList {
+        JumpList(slugs.filter { openable.contains($0) })
     }
 }

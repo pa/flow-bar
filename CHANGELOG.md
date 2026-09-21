@@ -3,6 +3,61 @@
 All notable changes to flow-bar, newest first. The top section is published as
 the GitHub release notes when a version is tagged.
 
+## v0.6.0 — 2026-09-22
+
+The palette takes on Raycast's shape: one bar of controls at the bottom, one
+menu behind the brand mark, and everything else behind `⌘K`.
+
+### Added
+
+- **An app menu behind the brand mark**, bottom-left, titled with the running
+  version — *What's new* and *Settings…*. Two menus, split by what they act on:
+  `⌘K` acts on the row in front of you, the mark acts on flow-bar. Before this
+  there was no way to *find* Settings; you had to know to type it.
+- **The mark is also where you are.** Inside a route the circle grows into a
+  pill carrying the task slug, the project or the playbook — and it is the only
+  place that is said, so the route chip has left the search field.
+- **`#` scopes the query to tags**, alongside `@` for commands. It is already
+  how a tag is written on every row and in every brief, and unscoped it merely
+  matched the `#` in every tag title at once. The root placeholder now names
+  both: `Search, @ for commands, # for tags`.
+- **`⌥↵` opens whatever `↵` opens.** With a batch selected that is the batch,
+  so the actions list offers *Open 8 selected* and *Open 8 selected, skipping
+  permission prompts* as a pair.
+
+### Changed
+
+- **The panel is 750pt wide and its field row 64pt** — Raycast's, measured side
+  by side on one display rather than guessed. The extra width goes to the row,
+  where a slug, a project and its tags compete for one line.
+- **Rounder throughout**: the panel 18 → 26, the jump list 24, the actions panel
+  20.
+- **The footer reads action-first, with one key cap per key** — `Actions` `⌘`
+  `K`, not a single `⌘K` chip. A chord is a sequence of physical keys, and
+  naming the action first matches the order you think in. The two
+  always-available keys float in their own capsule, in every route.
+- **The footer's left carries no keys at all.** `esc` and `←` are the two keys
+  nobody has to be told go back; `⌥↵` and `⌘J` are row actions and live in `⌘K`
+  with the other eight.
+- **No rules between the field, the list and the footer.** The list fades out
+  under the footer instead, when there is more to see.
+- **Both action panels light a row on hover**, and the footer's `Actions` is a
+  real button — it looked exactly like the primary beside it and did nothing.
+- **Settings is glass**, one card per group. SwiftUI's `Settings` scene hands
+  back an opaque window, so the material had nothing to sample until the window
+  itself was made transparent.
+
+### Fixed
+
+- **Settings' "Fix" button now works.** `SelfSign` carries a five-minute guard so
+  a bundle that fails to sign cannot relaunch itself forever — and it was also
+  gating the button, whose whole window of use is the minutes just after a
+  launch. It did nothing, said nothing, and looked broken. It now bypasses the
+  guard (a click is not a loop) and reports why when it cannot proceed.
+- **A pinned task that was blocked vanished from Needs-you.** The home sections
+  claim tasks in order, and pins were claiming first.
+- **A batch of one no longer drops a stated skip-permissions flag.**
+
 ## v0.5.1 — 2026-09-20
 
 ### Fixed

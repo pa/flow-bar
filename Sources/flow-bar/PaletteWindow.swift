@@ -27,10 +27,19 @@ final class PalettePanel: NSPanel {
 /// acting, the icon is for browsing.
 @MainActor
 final class PaletteWindowController: NSObject, NSWindowDelegate {
-    static let width: CGFloat = 700
+    /// 750pt, which is Raycast's.
+    ///
+    /// Not copied on taste — measured. Screenshotted side by side on the same
+    /// display, both windows centre on the same x, so their pixel widths are
+    /// directly comparable: 1497 against our 1399 at 2x, which is 749pt against
+    /// 700pt. The extra 50 all goes to the row, where a slug, a project and
+    /// two or three `#tags` compete for one line before anything truncates.
+    static let width: CGFloat = 750
 
     private let store: Store
     private let focus = PaletteFocus()
+    /// The jump list, shown while ⌘ is held. See `JumpPanelController`.
+    private lazy var jumpPanel = JumpPanelController(store: store)
     private var panel: PalettePanel?
 
     /// Screen-space y of the panel's **top** edge, held across resizes.
@@ -66,10 +75,12 @@ final class PaletteWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         focus.take()
+        jumpPanel.attach(to: panel)
     }
 
     func hide() {
         guard let panel, panel.isVisible else { return }
+        jumpPanel.detach()
         panel.orderOut(nil)
         onHidden?()
     }

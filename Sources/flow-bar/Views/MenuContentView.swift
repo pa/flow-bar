@@ -490,6 +490,16 @@ struct MenuContentView: View {
             store.switchTo(slug, skipPermissions: true)
         case .openBatch(let slugs):
             store.switchToAll(slugs)
+        case .openBatchSkippingPrompts(let slugs):
+            store.switchToAll(slugs, skipPermissions: true)
+        case .copy(let text):
+            store.copyToPasteboard(text)
+        case .copyBrief(let slug):
+            store.copyBrief(slug)
+        case .togglePin(let slug):
+            store.toggleJump(slug)
+        case .toggleBatch(let slug):
+            store.toggleSelection(slug)
         case .openProject(let slug):
             store.pendingProjectDrill = slug
             jump(to: .projects)

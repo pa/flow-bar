@@ -14,3 +14,6 @@ demo-flow-root/
 # Release artifacts
 *.zip
 *.dmg
+
+# Working files for the demo recording — 717MB of intermediates.
+video/

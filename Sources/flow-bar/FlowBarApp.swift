@@ -210,6 +210,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             store.switchToAll(slugs)
             return
         }
+        if case .openBatchSkippingPrompts(let slugs) = action {
+            store.switchToAll(slugs, skipPermissions: true)
+            return
+        }
+        if case .copy(let text) = action {
+            store.copyToPasteboard(text)
+            return
+        }
+        if case .copyBrief(let slug) = action {
+            store.copyBrief(slug)
+            return
+        }
         store.pendingPaletteAction = action
         presentPopover()
     }

@@ -46,40 +46,66 @@ enum SelfSign {
     /// possible on the next launch (e.g. after the user fixes their keychain).
     private static let retryCooldown: TimeInterval = 300
 
+    /// What an attempt did, so a button can say something when it does nothing.
+    enum Outcome: Equatable {
+        /// The helper is signing; the app is about to quit and reopen.
+        case relaunching
+        /// Nothing to do — already carries a stable identity.
+        case alreadySigned
+        /// Why it could not be done, in one sentence for the user.
+        case failed(String)
+    }
+
     /// Call early in `applicationDidFinishLaunching`. Returns true if it is
     /// relaunching the app (caller should stop doing setup work).
     /// Main-actor isolated: called from `applicationDidFinishLaunching` and
     /// terminates the app on the relaunch path.
     @MainActor
     @discardableResult
-    static func bootstrap() -> Bool {
+    static func bootstrap() -> Bool { attempt(force: false) == .relaunching }
+
+    /// - Parameter force: skip the loop guard, because a person asked.
+    ///
+    /// **The guard is a loop guard, and a click is not a loop.** It exists so
+    /// that a bundle which fails to sign does not relaunch itself forever; it
+    /// was also gating the Settings "Fix" button, which is pressed by hand and
+    /// at most once. The window it covers — five minutes after a launch — is
+    /// exactly when someone reads the warning and clicks, so in practice the
+    /// button did nothing, said nothing, and looked broken every time.
+    @MainActor
+    static func attempt(force: Bool) -> Outcome {
         // Prebuilt downloads carry the CI identity, which is already stable and
         // is what Updater verifies against. Never re-sign those.
-        guard AppInfo.channel != "github-release" else { return false }
+        guard AppInfo.channel != "github-release" else {
+            return .failed("This build is signed by the release pipeline already.")
+        }
 
         let bundle = Bundle.main.bundlePath
-        guard !isSigned(bundle, with: identity) else { return false }
+        guard !isSigned(bundle, with: identity) else { return .alreadySigned }
 
         // We're here and unsigned. If we *just* tried, the attempt didn't take —
         // run ad-hoc rather than relaunching forever.
-        if recentlyAttempted() {
+        if !force, recentlyAttempted() {
             NSLog("flow-bar: still not signed with '\(identity)'; running ad-hoc. "
                   + "Automation permission may need re-granting after upgrades.")
-            return false
+            return .failed("A signing attempt just failed; try again in a few minutes.")
         }
         recordAttempt()
 
         if !certExists() {
             guard createCert() else {
                 NSLog("flow-bar: could not create a signing cert; running ad-hoc.")
-                return false
+                return .failed("Couldn't create a signing certificate. "
+                               + "Run scripts/create-signing-cert.sh to see why.")
             }
         }
         // The bundle must not be signed while we're executing from it, so hand
         // the work to a helper that waits for us to exit first.
-        guard relaunchSigned(bundle) else { return false }
+        guard relaunchSigned(bundle) else {
+            return .failed("Couldn't start the signing helper.")
+        }
         NSApp.terminate(nil)
-        return true
+        return .relaunching
     }
 
     /// Whether this bundle currently carries our stable identity. Drives the

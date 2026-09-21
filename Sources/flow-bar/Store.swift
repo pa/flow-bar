@@ -553,6 +553,31 @@ final class Store: ObservableObject {
     }
 
     /// Pin or unpin a task, and say what happened.
+    /// Copy a task's brief and notes.
+    ///
+    /// Async because the text isn't in memory until someone asks: the palette
+    /// only loads a brief when you open one. The flash is the acknowledgement —
+    /// a copy that takes a moment and says nothing reads as a copy that failed.
+    func copyBrief(_ slug: String) {
+        Task {
+            let detail = try? await Task.detached(priority: .userInitiated) {
+                try FlowClient().taskDetail(slug)
+            }.value
+            guard let detail, !detail.clipboardText.isEmpty else {
+                self.flashResult(.failure)
+                return
+            }
+            self.copyToPasteboard(detail.clipboardText)
+        }
+    }
+
+    /// Whether a slug is still something `flow do` could switch to.
+    func isOpenable(_ slug: String) -> Bool {
+        allTasks.first { $0.slug == slug }?.canOpen
+            ?? tasks.first { $0.slug == slug }?.canOpen
+            ?? true   // not loaded yet — don't refuse on missing information
+    }
+
     @discardableResult
     func toggleJump(_ slug: String) -> JumpList.Change {
         var list = jumpList
@@ -613,6 +638,50 @@ final class Store: ObservableObject {
     /// The task at a 1-based jump position, if it still exists.
     func jumpTarget(_ number: Int) -> String? { jumpList.slug(at: number) }
 
+    // MARK: Search memo
+
+    /// Bumped whenever anything the palette ranks over changes.
+    private var paletteVersion = 0
+    private var memoKey: String?
+    private var memoResults: PaletteResults?
+
+    /// Memoised ranking for one (place, query) pair.
+    ///
+    /// **The view asks for its results about fifteen times per render** — the
+    /// list, the height, the cursor, the footer label, the ⌘K actions and every
+    /// `selected` helper all derive from them — and each ask was re-ranking the
+    /// whole index, rebuilding a route's rows from tasks first. The answer
+    /// cannot change within a render, so it is computed once.
+    ///
+    /// Keyed by the place as well as the query, because "" means the home list
+    /// at the root and "all of it" inside a route. The version invalidates it
+    /// whenever the underlying rows change, so a stale answer cannot outlive a
+    /// refresh.
+    func memoisedResults(key: String, query: String,
+                         _ compute: () -> PaletteResults) -> PaletteResults {
+        let full = "\(paletteVersion)|\(key)|\(query)"
+        if memoKey == full, let memoResults { return memoResults }
+        let results = compute()
+        memoKey = full
+        memoResults = results
+        return results
+    }
+
+    /// Call when anything the palette ranks over changes.
+    func invalidatePaletteSearch() {
+        paletteVersion &+= 1
+        memoKey = nil
+        memoResults = nil
+    }
+
+    /// True while the palette is showing a document — a brief, or the release
+    /// notes — rather than a list.
+    ///
+    /// The jump panel reads this: a list of nine other tasks sliding in under
+    /// something you are *reading* is out of place, and ⌘ is busy there (⌘C to
+    /// copy, ⌘K for actions). The keys keep working; only the reminder goes.
+    @Published var paletteReadingDocument = false
+
     /// Bumped every time the centered palette is summoned. The view watches it
     /// to clear the query and retake focus — a fresh summon is a fresh search.
     @Published var paletteNonce = 0
@@ -672,6 +741,7 @@ final class Store: ObservableObject {
     /// session that blocks while you are looking lands on the next open, which
     /// is the behaviour you want anyway.
     func rebuildPalette() {
+        invalidatePaletteSearch()
         palette = PaletteIndex.build(
             tasks: allTasks.isEmpty ? tasks : allTasks,
             projects: metrics?.projects ?? [],
@@ -703,8 +773,13 @@ final class Store: ObservableObject {
             }.value
             let (loadedTasks, loadedPlaybooks) = await (all, pbs)
             self.allTasks = loadedTasks
+            // Prune against what can still be OPENED, not merely what exists: a
+            // task you finished is still in the list flow returns, but its
+            // number would open nothing. Skipped on an empty read so a failed
+            // `flow` call can never wipe the list.
             if !loadedTasks.isEmpty {
-                let pruned = self.jumpList.pruned(to: Set(loadedTasks.map(\.slug)))
+                let openable = Set(loadedTasks.filter { $0.canOpen }.map(\.slug))
+                let pruned = self.jumpList.pruned(to: openable)
                 if pruned != self.jumpList { self.jumpList = pruned }
             }
             // Same list the Playbooks section uses — filling it here is a head
@@ -854,6 +929,7 @@ final class Store: ObservableObject {
                 try FlowClient().listTasks(tag: tag, includeDone: true, includeArchived: true)
             }.value) ?? []
             self.tagTasks = r
+            self.invalidatePaletteSearch()
             self.tagTasksLoading = false
         }
     }
@@ -867,6 +943,7 @@ final class Store: ObservableObject {
                 try FlowClient().listTasks(tag: "owner:\(slug)")
             }.value) ?? []
             self.ownerTasks = result
+            self.invalidatePaletteSearch()
             self.ownerTasksLoading = false
         }
     }
@@ -894,6 +971,7 @@ final class Store: ObservableObject {
                 try FlowClient().listTasks(project: slug, includeDone: true, includeArchived: true)
             }.value) ?? []
             self.projectTasks = result
+            self.invalidatePaletteSearch()
             self.projectTasksLoading = false
         }
     }
@@ -996,18 +1074,22 @@ final class Store: ObservableObject {
     private static let multiOpenSettleNanos: UInt64 = 1_200_000_000  // 1.2s
 
     /// Open several tasks at once. All `flow do` calls run in PARALLEL.
-    func switchToAll(_ slugs: [String]) {
+    func switchToAll(_ slugs: [String], skipPermissions: Bool? = nil) {
         // Snapshot BEFORE dismissing. `dismissPopover()` synchronously triggers
         // popoverDidClose -> endActiveRefresh(), which wipes `tasks` AND
         // `selectedTaskSlugs` — so reading the selection after the dismiss reads
         // an empty set. This `let` is load-bearing.
         let batch = slugs
         guard !batch.isEmpty else { return }
-        // Same modifier, same moment, before the dismiss below.
-        let skip = Self.skipPermissionsRequested()
+        // Same modifier, same moment, before the dismiss below — unless the
+        // caller stated it, which a clicked control must, since by the time its
+        // action runs whatever was held is long gone.
+        let skip = skipPermissions ?? Self.skipPermissionsRequested()
         // One task: reuse the proven single path (its flash/error handling is
-        // already exactly right, and there is nothing to aggregate).
-        if batch.count == 1 { switchTo(batch[0]); return }
+        // already exactly right, and there is nothing to aggregate). It is told
+        // the answer rather than left to re-read the keyboard, or a batch of one
+        // would quietly drop a stated flag.
+        if batch.count == 1 { switchTo(batch[0], skipPermissions: skip); return }
 
         FlowClient.log("multi-open: opening \(batch.count) sequentially — \(batch.joined(separator: ", "))")
         selectedTaskSlugs = []
