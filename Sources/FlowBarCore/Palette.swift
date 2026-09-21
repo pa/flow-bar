@@ -805,21 +805,33 @@ public struct PaletteIndex: Sendable {
               .map { item(for: $0, blocked: blocked.contains($0.slug), jump: jumpList) }
         }
 
-        // The jump list leads, in the order you pinned it — that order is the
+        // **What needs answering is claimed first.** These `take` calls are
+        // order-sensitive: each one consumes the slugs it uses, so whichever
+        // runs first owns a task that qualifies for two sections. The jump list
+        // used to run first, which meant pinning a task that later blocked
+        // moved its row out of Needs-you and under a heading about navigation —
+        // the menubar went orange and the section the icon points at was empty.
+        // The pin is not lost by claiming it here: the row still carries its
+        // number, so ⌘2 is unaffected.
+        let needsYou = take(tasks.filter { blocked.contains($0.slug) }.sortedBySlug())
+
+        // Then the jump list, in the order you pinned it — that order is the
         // whole point, and sorting it by anything would destroy the muscle
         // memory that makes ⌘2 worth having.
         let byslug = Dictionary(tasks.map { ($0.slug, $0) }, uniquingKeysWith: { a, _ in a })
         let pinned = take(jumpList.slugs.compactMap { byslug[$0] })
-
-        let needsYou = take(tasks.filter { blocked.contains($0.slug) }.sortedBySlug())
         let live = take(tasks.filter { $0.isLive }.sortedBySlug())
         let rest = take(tasks.filter { $0.status == "in-progress" }.sortedByPriority())
 
         var sections: [PaletteSection] = []
-        // Above even the jump list, and only once: nobody goes looking for
-        // "what's new", so the one moment it is worth saying is the first time
-        // you open the palette on a version you have not read about. It is one
-        // row, and opening it is what retires it.
+        // Needs-you leads whatever else is on screen: it is the only section the
+        // menubar icon is pointing at, and anything above it is something you
+        // did not open the palette for.
+        if !needsYou.isEmpty { sections.append(PaletteSection(title: "Needs you", items: needsYou)) }
+        // Then, once per version: nobody goes looking for "what's new", so the
+        // one moment it is worth saying is the first time you open the palette
+        // on a version you have not read about. One row, and opening it retires
+        // it.
         if let version = unreadRelease {
             sections.append(PaletteSection(title: "New in this version", items: [
                 PaletteItem(id: "cmd:whats-new-banner", kind: .command,
@@ -830,7 +842,6 @@ public struct PaletteIndex: Sendable {
             ]))
         }
         if !pinned.isEmpty { sections.append(PaletteSection(title: "Jump list", items: pinned)) }
-        if !needsYou.isEmpty { sections.append(PaletteSection(title: "Needs you", items: needsYou)) }
         if !live.isEmpty { sections.append(PaletteSection(title: "Live sessions", items: live)) }
         if !rest.isEmpty { sections.append(PaletteSection(title: "In progress", items: rest)) }
         sections.append(PaletteSection(title: "Commands", items: commands))

@@ -1926,6 +1926,24 @@ T.expect(PaletteIndex.build(tasks: [task("a", status: "in-progress")]).search(""
             .sections.contains { $0.title == "Jump list" } == false,
          "no pins, no section")
 
+// A pinned task that BLOCKS must still appear under Needs-you. The menubar
+// goes orange for it, and a palette whose Needs-you section is empty while the
+// icon is lit sends you looking for something that is sitting two rows lower
+// under a heading about navigation.
+do {
+    let blocked = task("amg-cost-opt", status: "in-progress", live: true)
+    let home = PaletteIndex.build(tasks: [blocked, task("other", status: "in-progress", live: true)],
+                                  blocked: ["amg-cost-opt"],
+                                  jumpList: JumpList(["amg-cost-opt"])).search("")
+    let needsYou = home.sections.first { $0.title == "Needs you" }
+    T.expect(needsYou != nil, "pinning a task must not empty the Needs-you section")
+    T.equal(needsYou?.items.map { $0.title }, ["amg-cost-opt"], "the blocked task is there")
+    T.equal(home.flat.filter { $0.title == "amg-cost-opt" }.count, 1, "and only once")
+    T.equal(home.sections.first?.title, "Needs you", "what needs answering leads")
+    // Its jump number still rides along, so ⌘1 is unaffected.
+    T.equal(needsYou?.items.first?.jumpNumber, 1, "the pin is still numbered")
+}
+
 print("\nPalette sigils")
 
 // `@` scopes the list to commands rather than pushing anywhere, so backspacing
